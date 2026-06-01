@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Large scientific data
+*.dat
+*.h5
+*.hdf5
+*.npy
+*.npz
+*.mat
+*.out
+*.log
+*.chk
+*.wout
+*.amn
+*.mmn
+*.eig
+*.spn
+*.uHu
+*.uIu
+*.hr
+*.tb
+
+# Allow tiny curated samples if explicitly stored under data/samples
+!data/samples/**/*.json
+!data/samples/**/*.csv
+!data/samples/**/*.png
+!data/samples/**/*.md
+!data/samples/**/*.yaml
+!data/samples/**/*.yml
+
+# Unreal generated folders
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+.vs/
+*.sln
+*.VC.db
+*.opensdf
+*.suo
+*.uasset
+*.umap
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local config that may leak paths
+configs/*.local.yaml
+configs/*.local.yml
+configs/*.private.*
