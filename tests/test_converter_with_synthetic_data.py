@@ -112,6 +112,51 @@ def test_converter_end_to_end(tmp_path: Path) -> None:
             f"source_paths value not sanitized: {v!r}"
         )
 
+    data_small = json.loads((out_dir / "data_small.json").read_text())
+    field = data_small.get("field") or {}
+    assert field["source"] == "reconstructed_from_input_nml_not_raw_output"
+    for k in ("Ex", "Ey", "Ax", "Ay"):
+        assert k in field and len(field[k]) == len(field["time_fs"]), (
+            f"field.{k} missing or wrong length"
+        )
+    assert field.get("reconstructed_from") == ["input.nml", "mod_laser.f90", "mod_params.f90"]
+    assert "solver_output_Et_At" in manifest["missing_modules"]
+
+
+def test_converter_promotes_to_raw_when_Et_dat_present(tmp_path: Path) -> None:
+    run_dir = tmp_path / "lgcov_with_raw_field"
+    _write_synthetic_run(run_dir, nt=400, nkx=6, nky=6, n_bands=8)
+    t = np.linspace(-10.0, 10.0, 400)
+    ex = 0.005 * np.cos(0.5 * t) * np.exp(-0.01 * t**2)
+    ey = np.zeros_like(t)
+    ax = -np.cumsum(np.r_[0, 0.5 * (ex[:-1] + ex[1:])] * np.r_[0, np.diff(t)])
+    ay = np.zeros_like(t)
+    it = np.arange(1, 401)
+    np.savetxt(run_dir / "Et.dat", np.column_stack([it, t, ex, ey, ax, ay]),
+               header="it time_fs Ex_au Ey_au Ax_au Ay_au")
+
+    out_dir = tmp_path / "bundle_out_raw"
+    rc = cv.main([
+        "--run-dir", str(run_dir),
+        "--out-dir", str(out_dir),
+        "--max-points-current", "200",
+        "--max-points-spectrum", "150",
+        "--selected-bands", "1:4",
+        "--max-grid", "6",
+        "--dataset-name", "synthetic_raw_field_dataset",
+    ])
+    assert rc == 0
+
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    data_small = json.loads((out_dir / "data_small.json").read_text())
+    assert data_small["field"]["source"] == "raw_solver_output"
+    assert "solver_output_Et_At" in manifest["available_modules"]
+    assert "solver_output_Et_At" not in manifest["missing_modules"]
+    assert data_small["field"]["raw_source_file"].startswith("<LOCAL_SBE_RUN_DIR>")
+
+    issues = vd.validate(out_dir, max_mb=10, total_max_mb=25)
+    assert issues.ok, "\n".join(issues.errors)
+
 
 def test_sanitize_manifest_replaces_absolute_paths(tmp_path: Path) -> None:
     bad = {

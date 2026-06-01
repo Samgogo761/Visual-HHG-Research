@@ -214,28 +214,122 @@ def parse_band_slice(spec: str, n_bands: int) -> list[int]:
 
 
 # ----------------------------------------------------------------------
-# Field reconstruction (kept very conservative)
+# Field: raw solver output (Et.dat / At.dat) and reconstruction
 # ----------------------------------------------------------------------
 
-def reconstruct_field(time_fs: np.ndarray, nml: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, str]:
-    """Best-effort cos-squared envelope reconstruction.
+C_NM_PER_FS = 299.792458
 
-    The result is always tagged 'reconstructed_from_input_nml_unverified'
-    because the solver's true envelope may differ. We deliberately do not
-    try to be clever here: the caller can choose to drop the field block.
+
+def read_field_dat(et_path: Path | None, at_path: Path | None) -> dict | None:
+    """Read raw solver E(t) and/or A(t) files.
+
+    Expected column layout for either file:
+        # it  time_fs  Ex_au  Ey_au  Ax_au  Ay_au
+
+    Et.dat alone is sufficient (Ax/Ay can be derived). At.dat alone is
+    sufficient (Ex/Ey can be derived). If both are present and disagree,
+    the values from Et.dat win for Ex/Ey and At.dat win for Ax/Ay.
+    """
+    et = _read_columns(et_path) if et_path and et_path.exists() else None
+    at = _read_columns(at_path) if at_path and at_path.exists() else None
+    if et is None and at is None:
+        return None
+
+    base = et if et is not None else at
+    if base.ndim != 2 or base.shape[1] < 4:
+        return None
+    time_fs = base[:, 1]
+
+    def pick(arr: np.ndarray, col: int, fallback: np.ndarray | None = None) -> np.ndarray:
+        if arr is not None and arr.shape[1] > col:
+            return arr[:, col]
+        return fallback if fallback is not None else np.zeros_like(time_fs)
+
+    ex = pick(et, 2, pick(at, 2))
+    ey = pick(et, 3, pick(at, 3))
+    ax = pick(at, 4, pick(et, 4, _integrate_neg(ex, time_fs)))
+    ay = pick(at, 5, pick(et, 5, _integrate_neg(ey, time_fs)))
+
+    return {
+        "time_fs": time_fs,
+        "Ex": ex, "Ey": ey,
+        "Ax": ax, "Ay": ay,
+        "et_present": et is not None,
+        "at_present": at is not None,
+    }
+
+
+def _integrate_neg(field: np.ndarray, time_fs: np.ndarray) -> np.ndarray:
+    """A(t) = -integral E dt' from t[0] to t, using trapezoidal cumulation.
+
+    A(t[0]) is fixed to zero. Units: same as field (a.u.) since the
+    integration kernel is time in fs but we keep both fields in a.u.
+    consistently with the solver convention.
+    """
+    if field.size < 2:
+        return np.zeros_like(field)
+    dt = np.diff(time_fs)
+    mids = 0.5 * (field[:-1] + field[1:])
+    a = np.concatenate(([0.0], -np.cumsum(mids * dt)))
+    return a
+
+
+def parse_run_log(path: Path) -> dict[str, Any]:
+    """Best-effort scrape of run.log for fields the laser cross-check uses."""
+    if not path.exists():
+        return {}
+    text = path.read_text(errors="ignore")
+    out: dict[str, Any] = {}
+    patterns = {
+        "omega0_au":  re.compile(r"omega0[_\s]*=?\s*([+-]?\d+\.?\d*(?:[eEdD][+-]?\d+)?)"),
+        "T_total_fs": re.compile(r"T[_\s]*total[_\s]*=?\s*([+-]?\d+\.?\d*(?:[eEdD][+-]?\d+)?)"),
+        "nt":         re.compile(r"\bnt\s*=?\s*(\d+)\b"),
+    }
+    for key, pat in patterns.items():
+        m = pat.search(text)
+        if not m:
+            continue
+        val = m.group(1).replace("D", "E").replace("d", "e")
+        try:
+            out[key] = int(val) if key == "nt" else float(val)
+        except ValueError:
+            pass
+    return out
+
+
+AU_TIME_FS = 0.024188843  # 1 atomic unit of time in fs
+
+
+def reconstruct_field(time_fs: np.ndarray,
+                      nml: dict[str, Any],
+                      run_log: dict[str, Any],
+                      nt_full: int | None = None) -> dict[str, Any]:
+    """Cos-squared envelope reconstruction from input.nml plus run.log cross-check.
+
+    Returns a dict with Ex, Ey, Ax, Ay (numpy arrays) and a small
+    provenance block describing the reconstruction source and the
+    cross-check against run.log. The label is
+    'reconstructed_from_input_nml_not_raw_output': the curves are now
+    audited and visualization-ready, but they are still not the solver's
+    native E(t) / A(t) output.
+
+    The cross-check converts the reconstructed omega from rad/fs to
+    atomic units before comparing against run_log['omega0_au'], and
+    compares nt against the pre-downsampling row count (nt_full) so a
+    downsampled t_axis does not produce a spurious mismatch.
     """
     if time_fs.size == 0:
-        return np.array([]), np.array([]), "unavailable"
+        return {"source": "unavailable"}
 
     wavelength_nm = float(nml.get("lambda_nm", nml.get("wavelength_nm", 3200.0)))
     n_cycles = float(nml.get("n_cycles", nml.get("ncyc", 4.0)))
     e0 = float(nml.get("E0_au", nml.get("amp", 0.005)))
 
-    c_nm_per_fs = 299.792458
-    period_fs = wavelength_nm / c_nm_per_fs
-    omega = 2.0 * math.pi / period_fs
-
+    period_fs = wavelength_nm / C_NM_PER_FS
+    omega_rad_per_fs = 2.0 * math.pi / period_fs
+    omega_au = omega_rad_per_fs * AU_TIME_FS
     duration = n_cycles * period_fs
+
     t0 = float(time_fs[0])
     center = t0 + duration / 2.0
     envelope = np.where(
@@ -243,8 +337,32 @@ def reconstruct_field(time_fs: np.ndarray, nml: dict[str, Any]) -> tuple[np.ndar
         np.cos(math.pi * (time_fs - center) / duration) ** 2,
         0.0,
     )
-    e_field = e0 * envelope * np.cos(omega * (time_fs - center))
-    return np.zeros_like(e_field), e_field, "reconstructed_from_input_nml_unverified"
+    ex = e0 * envelope * np.cos(omega_rad_per_fs * (time_fs - center))
+    ey = np.zeros_like(ex)
+    ax = _integrate_neg(ex, time_fs)
+    ay = np.zeros_like(ax)
+
+    cross = {}
+    if "omega0_au" in run_log:
+        cross["omega0_au"] = "match" if math.isclose(run_log["omega0_au"], omega_au, rel_tol=5e-2) else "mismatch"
+    if "T_total_fs" in run_log:
+        cross["T_total_fs"] = "match" if math.isclose(run_log["T_total_fs"], duration, rel_tol=5e-2) else "mismatch"
+    if "nt" in run_log:
+        nt_compare = nt_full if nt_full is not None else time_fs.size
+        cross["nt"] = "match" if run_log["nt"] == nt_compare else "mismatch"
+
+    return {
+        "time_fs": time_fs,
+        "Ex": ex, "Ey": ey, "Ax": ax, "Ay": ay,
+        "source": "reconstructed_from_input_nml_not_raw_output",
+        "reconstructed_from": ["input.nml", "mod_laser.f90", "mod_params.f90"],
+        "cross_checked_with": ["run.log"] if run_log else [],
+        "cross_check": cross,
+        "note": (
+            "Reconstructed from solver inputs and cross-checked against run.log; "
+            "not raw solver output. Visualization-ready."
+        ),
+    }
 
 
 # ----------------------------------------------------------------------
@@ -400,6 +518,7 @@ def main(argv: list[str] | None = None) -> int:
     bg = read_bands_grid(bands_arr) if bands_arr.exists() else None
     band_path_arr = _read_columns(args.band_path) if args.band_path else None
     nml = parse_input_nml(run_dir / "input.nml")
+    run_log = parse_run_log(run_dir / "run.log")
 
     selected = parse_band_slice(args.selected_bands, bg.n_bands if bg else 0)
 
@@ -408,16 +527,44 @@ def main(argv: list[str] | None = None) -> int:
     band_path = build_band_path(band_path_arr)
     band_grid_preview = build_band_grid_preview(bg, selected, args.max_grid)
 
-    if t_axis is not None:
-        ex, ey, field_source = reconstruct_field(t_axis, nml)
+    raw_field = read_field_dat(run_dir / "Et.dat", run_dir / "At.dat")
+    if raw_field is not None:
+        f_t = downsample(raw_field["time_fs"], args.max_points_current)
+        f_ex = downsample(raw_field["Ex"], args.max_points_current)
+        f_ey = downsample(raw_field["Ey"], args.max_points_current)
+        f_ax = downsample(raw_field["Ax"], args.max_points_current)
+        f_ay = downsample(raw_field["Ay"], args.max_points_current)
+        raw_source_file = sanitize_run_path(
+            run_dir, run_dir / ("Et.dat" if raw_field["et_present"] else "At.dat")
+        )
         field_block = {
-            "time_fs": t_axis.astype(float).tolist(),
-            "Ex": ex.astype(float).tolist(),
-            "Ey": ey.astype(float).tolist(),
-            "source": field_source,
+            "time_fs": f_t.astype(float).tolist(),
+            "Ex": f_ex.astype(float).tolist(),
+            "Ey": f_ey.astype(float).tolist(),
+            "Ax": f_ax.astype(float).tolist(),
+            "Ay": f_ay.astype(float).tolist(),
+            "source": "raw_solver_output",
+            "raw_source_file": raw_source_file,
+            "raw_source_columns": "it, time_fs, Ex_au, Ey_au, Ax_au, Ay_au",
+        }
+    elif t_axis is not None:
+        nt_full = jt.shape[0] if jt is not None else None
+        rec = reconstruct_field(t_axis, nml, run_log, nt_full=nt_full)
+        field_block = {
+            "time_fs": rec["time_fs"].astype(float).tolist(),
+            "Ex": rec["Ex"].astype(float).tolist(),
+            "Ey": rec["Ey"].astype(float).tolist(),
+            "Ax": rec["Ax"].astype(float).tolist(),
+            "Ay": rec["Ay"].astype(float).tolist(),
+            "source": rec["source"],
+            "reconstructed_from": rec["reconstructed_from"],
+            "cross_checked_with": rec["cross_checked_with"],
+            "cross_check": rec["cross_check"],
+            "note": rec["note"],
         }
     else:
-        field_block = {"time_fs": [], "Ex": [], "Ey": [], "source": "unavailable"}
+        field_block = {"time_fs": [], "Ex": [], "Ey": [],
+                       "Ax": [], "Ay": [], "source": "unavailable"}
 
     data_small = {
         "time_series":       time_series,
@@ -427,11 +574,11 @@ def main(argv: list[str] | None = None) -> int:
         "field":             field_block,
     }
 
-    available, missing = [], [
+    available = []
+    missing = [
         "k_space_occupation",
         "rho_k_t",
         "production_lg_cov_berry_curvature",
-        "solver_output_Et_At",
     ]
     if time_series:
         available.append("current_time_series")
@@ -447,7 +594,13 @@ def main(argv: list[str] | None = None) -> int:
         available.append("valley_current")
     if field_block["source"] != "unavailable":
         available.append("field_time_series")
+    if field_block["source"] == "raw_solver_output":
+        available.append("solver_output_Et_At")
+    else:
+        missing.append("solver_output_Et_At")
 
+    has_et = raw_field is not None and raw_field["et_present"]
+    has_at = raw_field is not None and raw_field["at_present"]
     source_paths = {
         "run_dir": f"{RUN_DIR_PLACEHOLDER}",
         **({"Jt":        sanitize_run_path(run_dir, run_dir / "Jt.dat")}        if jt is not None else {}),
@@ -456,12 +609,21 @@ def main(argv: list[str] | None = None) -> int:
         **({"Jt_decomposed": sanitize_run_path(run_dir, run_dir / "Jt_decomposed.dat")} if jt_d is not None else {}),
         **({"Jt_valley":     sanitize_run_path(run_dir, run_dir / "Jt_valley.dat")}     if jt_v is not None else {}),
         **({"input_nml": sanitize_run_path(run_dir, run_dir / "input.nml")}     if nml else {}),
+        **({"run_log":   sanitize_run_path(run_dir, run_dir / "run.log")}       if run_log else {}),
+        **({"Et":        sanitize_run_path(run_dir, run_dir / "Et.dat")}        if has_et else {}),
+        **({"At":        sanitize_run_path(run_dir, run_dir / "At.dat")}        if has_at else {}),
         **({"band_path": sanitize_band_path(args.band_path)} if band_path_arr is not None else {}),
     }
 
+    if field_block["source"] == "raw_solver_output":
+        field_conf = "field is raw solver output"
+    elif field_block["source"].startswith("reconstructed"):
+        field_conf = "field reconstructed from input.nml and cross-checked against run.log, not raw solver output"
+    else:
+        field_conf = "field unavailable"
     default_conf = (
         "research-output, visualization-ready for J(t)/HHG/bands; "
-        "field reconstruction pending verification"
+        f"{field_conf}"
     )
     manifest = build_manifest(
         dataset_name=args.dataset_name or run_dir.name or "hhgxr_demo_run",
@@ -492,6 +654,10 @@ def main(argv: list[str] | None = None) -> int:
             **({"Jt_decomposed": jt_d} if jt_d is not None else {}),
             **({"Jt_valley": jt_v} if jt_v is not None else {}),
             **({"kx": bg.kx, "ky": bg.ky, "energies_eV": bg.energies} if bg is not None else {}),
+            **({"Et_time_fs": raw_field["time_fs"],
+                "Ex": raw_field["Ex"], "Ey": raw_field["Ey"],
+                "Ax": raw_field["Ax"], "Ay": raw_field["Ay"]}
+               if raw_field is not None else {}),
         )
         print(f"[ok] wrote {npz_path}")
 

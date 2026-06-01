@@ -37,10 +37,12 @@ UNC_PATH = re.compile(r"\\\\[^\\]+\\[^\\]+")
 UNIX_ABS = re.compile(r"(^|[^A-Za-z0-9_])(/(?:home|root|mnt|media|Users|data|scratch|work|share|var|opt)/[^\"\s]+)")
 
 ALLOWED_FIELD_SOURCES = {
-    "solver_native",
-    "reconstructed_from_input_nml_verified",
-    "reconstructed_from_input_nml_unverified",
+    "raw_solver_output",
+    "reconstructed_from_input_nml_not_raw_output",
     "unavailable",
+    "solver_native",                              # legacy alias for raw_solver_output
+    "reconstructed_from_input_nml_verified",      # legacy, pre-audit
+    "reconstructed_from_input_nml_unverified",    # legacy, pre-audit
 }
 
 LARGE_EXTS = {".dat", ".tb", ".hr", ".h5", ".hdf5", ".npy", ".npz"}
@@ -155,10 +157,16 @@ def check_field(field: dict[str, Any], issues: Issues) -> None:
         issues.err(f"field.source invalid: {src!r}")
     if src and src != "unavailable":
         t = field.get("time_fs") or []
-        for k in ("Ex", "Ey"):
+        for k in ("Ex", "Ey", "Ax", "Ay"):
             v = field.get(k) or []
             if isinstance(v, list) and v and len(v) != len(t):
                 issues.err(f"field.{k} length {len(v)} != time_fs length {len(t)}")
+        if src.startswith("reconstructed_from_input_nml") and src != "reconstructed_from_input_nml_not_raw_output":
+            issues.warn(
+                f"field.source uses legacy label {src!r}; "
+                "regenerate via convert_sbe_run.py to get "
+                "'reconstructed_from_input_nml_not_raw_output' with cross-check provenance"
+            )
 
 
 def check_data_small(ds: dict[str, Any], issues: Issues) -> None:

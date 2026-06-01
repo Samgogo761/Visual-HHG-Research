@@ -51,6 +51,27 @@ def test_field_source_label_is_allowed() -> None:
     assert field.get("source") in vd.ALLOWED_FIELD_SOURCES
 
 
+def test_field_uses_current_label_vocabulary() -> None:
+    data_small = json.loads((BUNDLE / "data_small.json").read_text())
+    src = (data_small.get("field") or {}).get("source")
+    assert src in {
+        "raw_solver_output",
+        "reconstructed_from_input_nml_not_raw_output",
+        "unavailable",
+    }, f"committed bundle still uses legacy label {src!r}; regenerate it"
+
+
+def test_field_block_carries_Ex_Ey_Ax_Ay() -> None:
+    data_small = json.loads((BUNDLE / "data_small.json").read_text())
+    field = data_small.get("field") or {}
+    if field.get("source") == "unavailable":
+        return
+    n = len(field.get("time_fs") or [])
+    for k in ("Ex", "Ey", "Ax", "Ay"):
+        v = field.get(k) or []
+        assert isinstance(v, list) and len(v) == n, f"field.{k} length {len(v)} != time_fs {n}"
+
+
 def test_bundle_has_no_private_paths() -> None:
     manifest = json.loads((BUNDLE / "manifest.json").read_text())
     data_small = json.loads((BUNDLE / "data_small.json").read_text())

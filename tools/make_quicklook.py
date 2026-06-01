@@ -59,19 +59,34 @@ def _plot_band_path(ax, bp: dict[str, Any]) -> None:
 
 def _plot_field(ax, field: dict[str, Any]) -> None:
     t = field.get("time_fs") or []
+    ex = field.get("Ex") or []
     ey = field.get("Ey") or []
+    ax_arr = field.get("Ax") or []
+    e_main = ex if ex else ey
     src = field.get("source", "unavailable")
-    if src == "unavailable" or not t or not ey:
-        _placeholder(ax, "E(t)", f"unavailable ({src})")
+    if src == "unavailable" or not t or not e_main:
+        _placeholder(ax, "E(t) / A(t)", f"unavailable ({src})")
         return
-    ax.plot(t, ey, lw=0.7, color="#cc6600")
-    ax.set_title(f"E(t)  [{src}]", fontsize=9)
+    ax.plot(t, e_main, lw=0.7, color="#cc6600", label="E (a.u.)")
+    if ax_arr and len(ax_arr) == len(t):
+        ax2 = ax.twinx()
+        ax2.plot(t, ax_arr, lw=0.7, color="#005599", linestyle="--", label="A (a.u.)")
+        ax2.set_ylabel("A (a.u.)", color="#005599")
+        ax2.tick_params(axis="y", colors="#005599")
+    ax.set_title(f"E(t) / A(t)  [{src}]", fontsize=8)
     ax.set_xlabel("time (fs)")
-    ax.set_ylabel("E (a.u.)")
-    if src.endswith("_unverified"):
-        ax.text(0.02, 0.95, "unverified", transform=ax.transAxes,
-                color="#cc0000", fontsize=8, ha="left", va="top",
-                bbox=dict(boxstyle="round", fc="#fff0f0", ec="#cc0000", lw=0.5))
+    ax.set_ylabel("E (a.u.)", color="#cc6600")
+    if src == "raw_solver_output":
+        badge = ("raw solver", "#006600", "#f0fff0")
+    elif src == "reconstructed_from_input_nml_not_raw_output":
+        badge = ("reconstructed (not raw)", "#cc6600", "#fff8f0")
+    elif src.endswith("_unverified"):
+        badge = ("unverified", "#cc0000", "#fff0f0")
+    else:
+        badge = (src, "#444444", "#f4f4f4")
+    ax.text(0.02, 0.95, badge[0], transform=ax.transAxes,
+            color=badge[1], fontsize=7, ha="left", va="top",
+            bbox=dict(boxstyle="round", fc=badge[2], ec=badge[1], lw=0.5))
 
 
 def _plot_current(ax, ts: dict[str, Any]) -> None:
