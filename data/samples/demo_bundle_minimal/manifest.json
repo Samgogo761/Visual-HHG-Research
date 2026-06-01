@@ -1,0 +1,54 @@
+{
+  "schema": "hhgxr-demo-bundle-v0",
+  "dataset_name": "synthetic_demo_bundle_v0",
+  "physics_provenance": {
+    "source_class": "Model-based",
+    "material": "bilayer CrI3 AFM",
+    "model": "Wannier-SBE",
+    "gauge_method": "lg_cov",
+    "confidence": "synthetic demo bundle; curves are illustrative only, do not use as physical references"
+  },
+  "units": {
+    "time": "fs",
+    "current": "a.u.",
+    "energy": "eV",
+    "k": "1/bohr",
+    "omega": "a.u.",
+    "hhg": "|J(omega)|^2 solver scaling"
+  },
+  "dimensions": {
+    "nt": 600,
+    "nkx": 8,
+    "nky": 8,
+    "n_bands": 12
+  },
+  "available_modules": [
+    "current_time_series",
+    "hhg_spectrum",
+    "band_path",
+    "band_grid",
+    "current_decomposition",
+    "valley_current",
+    "field_time_series"
+  ],
+  "missing_modules": [
+    "k_space_occupation",
+    "rho_k_t",
+    "production_lg_cov_berry_curvature",
+    "solver_output_Et_At"
+  ],
+  "files": {
+    "data_small": "data_small.json",
+    "quicklook": "quicklook_summary.png"
+  },
+  "source_paths": {
+    "run_dir": "<LOCAL_SBE_RUN_DIR>",
+    "Jt": "<LOCAL_SBE_RUN_DIR>/Jt.dat",
+    "HHG": "<LOCAL_SBE_RUN_DIR>/HHG.dat",
+    "bands": "<LOCAL_SBE_RUN_DIR>/bands.dat",
+    "Jt_decomposed": "<LOCAL_SBE_RUN_DIR>/Jt_decomposed.dat",
+    "Jt_valley": "<LOCAL_SBE_RUN_DIR>/Jt_valley.dat",
+    "input_nml": "<LOCAL_SBE_RUN_DIR>/input.nml",
+    "band_path": "<LOCAL_WANNIER_DIR>/CrI3_band.dat"
+  }
+}
