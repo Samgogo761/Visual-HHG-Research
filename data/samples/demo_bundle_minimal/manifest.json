@@ -49,6 +49,7 @@
     "Jt_decomposed": "<LOCAL_SBE_RUN_DIR>/Jt_decomposed.dat",
     "Jt_valley": "<LOCAL_SBE_RUN_DIR>/Jt_valley.dat",
     "input_nml": "<LOCAL_SBE_RUN_DIR>/input.nml",
+    "run_log": "<LOCAL_SBE_RUN_DIR>/run.log",
     "band_path": "<LOCAL_WANNIER_DIR>/CrI3_band.dat"
   }
 }

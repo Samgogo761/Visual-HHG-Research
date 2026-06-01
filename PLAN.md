@@ -82,9 +82,20 @@ interband coherence |rho_mn(k,t)|
 production-route Berry curvature for lg_cov
 ```
 
-A reconstructed `E(t)` quicklook may look suspiciously spike-like.
-**Do not** treat reconstructed `E(t)` as physically trusted until it has
-been verified against the exact solver laser model.
+Field reconstruction history:
+
+- v0.1 of the audit script produced a delta-spike `E(t)`. That
+  reconstruction was labeled `reconstructed_from_input_nml_unverified`.
+- The audit script was fixed locally. It now reproduces a 3200 nm,
+  4-cycle, ~42.70 fs cos²-envelope pulse, validated against
+  `mod_laser.f90`, `mod_params.f90`, and the `omega0` / `T_total` / `nt`
+  values in `run.log`.
+- The reconstructed field is therefore now labeled
+  `reconstructed_from_input_nml_not_raw_output`: visualization-ready,
+  but still not the solver's native `Et.dat` / `At.dat` output.
+- When the solver finally emits `Et.dat` / `At.dat` directly, the
+  converter picks them up automatically and the label flips to
+  `raw_solver_output` with no code change required.
 
 ### 1.4 Data policy
 
@@ -194,6 +205,19 @@ pushing.
 ---
 
 ## 7. Priority order
+
+```
+1. CC finishes GitHub repo skeleton and convert_sbe_run.py
+2. The current fixed quicklook / sanitized manifest is the baseline
+3. data/samples/demo_bundle_minimal/ is regenerated from current scripts
+4. validate_demo_bundle.py: no private paths, no large blobs, no missing keys
+5. Desktop Unreal reads data_small.json and renders J(t) / HHG / band path
+6. Solver emits Et.dat / At.dat -> field label flips to raw_solver_output
+7. Design rho(k,t) snapshot export per docs/RHO_EXPORT_SPEC.md
+8. Only then: Niagara / XR / MCP
+```
+
+Underlying ordering principle:
 
 ```
 physics provenance

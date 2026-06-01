@@ -215,23 +215,64 @@ A small slice of the band grid suitable for a quick 3D preview:
 
 ### 2.6 `field`
 
+The field block now always carries both `E(t)` and `A(t)`. When
+`source = "raw_solver_output"`, the arrays come directly from the
+solver's `Et.dat` / `At.dat` (column layout
+`# it time_fs Ex_au Ey_au Ax_au Ay_au`). When `source` is the
+reconstructed label, the arrays come from `input.nml` +
+`mod_laser.f90` + `mod_params.f90` and are cross-checked against
+`omega0`, `T_total`, `nt` in `run.log`.
+
+Raw solver form:
+
 ```json
 "field": {
   "time_fs": [...],
-  "Ex":      [...],
-  "Ey":      [...],
-  "source":  "reconstructed_from_input_nml_unverified"
+  "Ex": [...], "Ey": [...],
+  "Ax": [...], "Ay": [...],
+  "source": "raw_solver_output",
+  "raw_source_file":    "<LOCAL_SBE_RUN_DIR>/Et.dat",
+  "raw_source_columns": "it, time_fs, Ex_au, Ey_au, Ax_au, Ay_au"
+}
+```
+
+Reconstructed form (current first-demo baseline):
+
+```json
+"field": {
+  "time_fs": [...],
+  "Ex": [...], "Ey": [...],
+  "Ax": [...], "Ay": [...],
+  "source": "reconstructed_from_input_nml_not_raw_output",
+  "reconstructed_from":  ["input.nml", "mod_laser.f90", "mod_params.f90"],
+  "cross_checked_with":  ["run.log"],
+  "cross_check":         {"omega0_au": "match", "T_total_fs": "match", "nt": "match"},
+  "note": "Reconstructed from solver inputs and cross-checked against run.log; not raw solver output."
 }
 ```
 
 `source` is required and must be one of:
 
 ```
-solver_native
-reconstructed_from_input_nml_verified
-reconstructed_from_input_nml_unverified
+raw_solver_output
+reconstructed_from_input_nml_not_raw_output
 unavailable
 ```
+
+Legacy labels (accepted by the validator with a warning, used by older
+bundles before the audit script existed):
+
+```
+solver_native                              -> alias for raw_solver_output
+reconstructed_from_input_nml_verified      -> pre-audit, deprecated
+reconstructed_from_input_nml_unverified    -> pre-audit, deprecated
+```
+
+Upgrade path: any bundle that still uses an `_unverified` or `_verified`
+label should be regenerated with `tools/convert_sbe_run.py`. When the
+solver starts emitting `Et.dat` / `At.dat`, the converter will pick them
+up automatically and switch the label to `raw_solver_output` with no CLI
+change required.
 
 ---
 

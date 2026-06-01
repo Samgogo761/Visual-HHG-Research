@@ -92,18 +92,37 @@ not `Data-driven`.
 
 ## 3. Field reconstruction note
 
-The reconstructed driving field `E(t)` produced from `input.nml` is
-currently labeled:
+History (kept for the audit trail):
+
+- The first reconstructor produced a delta-spike pulse and was tagged
+  `reconstructed_from_input_nml_unverified`.
+- The local audit script was then fixed. It now reproduces a sensible
+  3200 nm, 4-cycle, ~42.70 fs cos²-envelope pulse, and the reconstructor
+  was rechecked against `input.nml`, `mod_laser.f90`, and
+  `mod_params.f90` with cross-validation of `omega0`, `T_total`, and
+  `nt` from `run.log`.
+
+Current label:
 
 ```
-field_source = "reconstructed_from_input_nml_unverified"
+field_source = "reconstructed_from_input_nml_not_raw_output"
 ```
 
-The reconstructed quicklook may appear suspiciously spike-like. **Do not
-treat the reconstructed field as physically trusted until it is verified
-against the exact solver laser model.** Once verified, the label changes
-to `reconstructed_from_input_nml_verified`. If the solver itself emits
-`E(t)` / `A(t)`, the label becomes `solver_native`.
+Meaning: `E(t)` and `A(t)` are reconstructed from the solver inputs and
+cross-checked against `run.log`, so the curves are visualization-ready
+and good enough for the first demo. They are still **not** the solver's
+native output. The first demo may show the curves; the UI and the
+manifest must keep the label visible.
+
+Upgrade path:
+
+- If the solver starts emitting `Et.dat` / `At.dat` directly (per the
+  recommended column layout `# it time_fs Ex_au Ey_au Ax_au Ay_au`),
+  the converter picks them up automatically and the label switches to
+  `raw_solver_output` with no schema change required.
+- The legacy `_unverified` / `_verified` labels are accepted by the
+  validator for backward compatibility but are flagged with a warning.
+  Older bundles should be regenerated.
 
 ---
 

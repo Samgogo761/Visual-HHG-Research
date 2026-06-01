@@ -139,9 +139,12 @@ Validation checks:
    manifest files.
 3. Always tag each physical quantity with a provenance label from
    [`docs/PHYSICS_PROVENANCE.md`](./docs/PHYSICS_PROVENANCE.md).
-4. If `E(t)` or `A(t)` is reconstructed from `input.nml`, mark it as
-   `reconstructed_from_input_nml_unverified` until it is checked against
-   the solver's exact laser model.
+4. If `E(t)` / `A(t)` are reconstructed from `input.nml` (plus
+   `mod_laser.f90`, `mod_params.f90`) and cross-checked against `run.log`,
+   tag them as `reconstructed_from_input_nml_not_raw_output`. Tag them
+   `raw_solver_output` only when the solver itself emits `Et.dat` /
+   `At.dat`. Older bundles using `_unverified` / `_verified` labels
+   should be regenerated.
 
 ## Priority order
 

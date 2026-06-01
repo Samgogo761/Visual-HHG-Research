@@ -12,9 +12,18 @@ exercised without access to the real Wannier-SBE outputs.
 
 ```
 manifest.json            schema + provenance + dimensions + module lists
-data_small.json          downsampled JSON arrays (J(t), HHG, bands, field)
-quicklook_summary.png    4-panel preview
+data_small.json          downsampled JSON arrays (J(t), HHG, bands, E(t)+A(t))
+quicklook_summary.png    4-panel preview, E/A overlay
 ```
+
+The `field` block carries Ex/Ey **and** Ax/Ay. In this synthetic
+bundle the field is reconstructed (label
+`reconstructed_from_input_nml_not_raw_output`) so that downstream
+clients can exercise the cross-check provenance keys
+(`reconstructed_from`, `cross_checked_with`, `cross_check`) without
+needing a real solver `Et.dat`. The HHG-XR Lab converter automatically
+flips the label to `raw_solver_output` when the run directory contains
+a real `Et.dat` / `At.dat`.
 
 ## How it was generated
 

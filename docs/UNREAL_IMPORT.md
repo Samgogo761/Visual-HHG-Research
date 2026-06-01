@@ -36,11 +36,36 @@ Source: `data_small.band_path.{k_path, energy_eV}`.
 
 Render as 2D line plot in a UMG widget or a 3D ribbon along the k-path.
 
-### Panel B — Driving field E(t)
+The first-demo dataset carries 104 bands. **Do not render all of them
+by default.** Recommended UI:
 
-Source: `data_small.field.{time_fs, Ex, Ey}`.
+- Default view: ~10-20 bands closest to the gap. The user can supply
+  the slice from `manifest.dimensions.n_bands` and a band-index offset
+  hint, or the client can heuristically pick bands whose value at the
+  center of the k-path is closest to zero.
+- A toggle "near-gap bands / full bands" lets the viewer fall back to
+  the full set.
+- The full 104-band view is always there but never the default.
+
+### Panel B — Driving field E(t) and A(t)
+
+Source: `data_small.field.{time_fs, Ex, Ey, Ax, Ay}`.
 Skip the panel entirely if `field.source == "unavailable"`.
-Display a yellow caution badge if `field.source` ends in `_unverified`.
+
+Badge rules (driven by `field.source`):
+
+- `raw_solver_output` -> green badge "raw solver"
+- `reconstructed_from_input_nml_not_raw_output` -> orange badge
+  "reconstructed (not raw)"; tooltip should expose
+  `field.reconstructed_from`, `field.cross_checked_with`, and
+  `field.cross_check`
+- legacy `_unverified` / `_verified` -> red badge "legacy unverified",
+  prompt the user to regenerate the bundle
+- `unavailable` -> hide the panel
+
+Render both E(t) (primary axis) and A(t) (secondary axis). Keep the
+badge on the panel chrome, not inside the chart, so it survives
+screenshot cropping.
 
 ### Panel C — Current J(t)
 
@@ -56,6 +81,12 @@ Optional layers:
 Source: `data_small.spectrum.{harmonic_order, HHG_total}`.
 
 Render as log-scale line. Mark odd harmonic orders explicitly.
+
+Recommended interaction: clicking a peak should pop a tooltip with the
+harmonic order, the corresponding photon energy from
+`spectrum.omega_au`, and a short physics explanation slot. The
+explanation text itself is a separate Unreal asset; this panel only
+exposes the peak metadata.
 
 ### Panel E — 3D k-space band surface preview
 

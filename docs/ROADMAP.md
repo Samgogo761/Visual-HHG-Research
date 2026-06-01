@@ -35,15 +35,21 @@ Exit criterion: the acceptance checklist in `PLAN.md` is fully green.
 
 **Primary deliverable:** a small Unreal project that opens
 `data/samples/demo_bundle_minimal/manifest.json` and renders the band
-path, J(t), and HHG spectrum.
+path (near-gap subset by default), J(t), HHG spectrum, and E(t)/A(t).
 
 In scope:
 
 - A single Unreal project under `unreal/HHGXRLab/`.
 - A bundle-loader module that parses JSON into Unreal structs.
 - UMG widgets for the four core panels.
+- A near-gap band slice with a fallback toggle to the full set.
+- Click-on-harmonic-peak interaction on the HHG panel that surfaces
+  the harmonic order and omega from `data_small.spectrum`.
 - A `UProceduralMeshComponent` for the band surface preview.
-- A persistent provenance badge.
+- A persistent provenance badge that reflects
+  `manifest.physics_provenance.source_class` and the new
+  `field.source` vocabulary (raw solver / reconstructed not-raw /
+  unavailable).
 
 Out of scope:
 
