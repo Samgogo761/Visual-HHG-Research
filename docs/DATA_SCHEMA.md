@@ -100,11 +100,15 @@ band_grid
 band_path
 current_decomposition
 valley_current
+spin_current                   # Jt_spin.dat present
+hhg_spin                       # HHG_spin.dat present
+quantum_geometry               # quantum_geometry.dat present (Omega + metric + valley)
+k_space_occupation             # occupation_kt.dat present (Tier-0 snapshots)
+band_resolved_occupation       # occupation_band_kt.dat present
 field_time_series
-k_space_occupation
-rho_k_t
-production_lg_cov_berry_curvature
-solver_output_Et_At
+solver_output_Et_At            # native Et.dat/At.dat present
+interband_coherence_norm       # pending solver export (SOLVER_EXPORT_REQUESTS.md)
+rho_k_t_full_density_matrix    # intentionally not exported (size)
 ```
 
 ### 1.6 `files`
@@ -147,13 +151,21 @@ A manifest with a literal `C:\...`, `D:\...`, `/home/<user>/...`,
 
 ```json
 {
-  "time_series":         { ... },
-  "spectrum":            { ... },
-  "band_path":           { ... },
-  "band_grid_preview":   { ... },
-  "field":               { ... }
+  "time_series":              { ... },
+  "spectrum":                 { ... },
+  "spectrum_spin":            { ... },
+  "band_path":                { ... },
+  "band_grid_preview":        { ... },
+  "quantum_geometry_preview": { ... },
+  "occupation_preview":       { ... },
+  "field":                    { ... }
 }
 ```
+
+Source column formats follow the Quantum-light solver writers; see the
+docstring of `tools/convert_sbe_run.py` for the exact per-file layouts
+(`it` index column first on all time series, long-format `bands.dat`
+with a `# nkx= nky= n_trunc=` header, etc.).
 
 ### 2.2 `time_series`
 
@@ -171,11 +183,16 @@ A manifest with a literal `C:\...`, `D:\...`, `/home/<user>/...`,
   "Jx_Kp":    [...],
   "Jy_Kp":    [...],
   "eta_x":    [...],
-  "eta_y":    [...]
+  "eta_y":    [...],
+  "Jx_spin":  [...],
+  "Jy_spin":  [...]
 }
 ```
 
 All arrays in `time_series` must have the same length as `time_fs`.
+`eta_x`/`eta_y` are the valley polarization ratios written by the
+solver into `Jt_valley.dat`; `Jx_spin`/`Jy_spin` is the spin-z current
+`J^{s_z}(t) = (1/2)<{S_z, v}>` from `Jt_spin.dat`.
 
 ### 2.3 `spectrum`
 
@@ -191,6 +208,9 @@ All arrays in `time_series` must have the same length as `time_fs`.
 
 All arrays in `spectrum` must have the same length.
 
+`spectrum_spin` uses the identical layout and carries the HHG spectrum
+of the spin-z current (`HHG_spin.dat`).
+
 ### 2.4 `band_path`
 
 ```json
@@ -202,16 +222,83 @@ All arrays in `spectrum` must have the same length.
 
 ### 2.5 `band_grid_preview`
 
-A small slice of the band grid suitable for a quick 3D preview:
+A small slice of the band grid suitable for a quick 3D preview.
+
+Solver long-format `bands.dat` produces cartesian k-coordinates on a
+sheared (hexagonal-lattice) grid, so kx and ky are **2D** arrays:
 
 ```json
 "band_grid_preview": {
-  "kx":                    [...],   // length nkx
-  "ky":                    [...],   // length nky
-  "selected_band_indices": [...],
+  "kx_grid":               [[...], ...],  // shape: [nkx][nky], 1/bohr
+  "ky_grid":               [[...], ...],
+  "selected_band_indices": [...],         // solver band numbers (1-based)
+  "band_index_base":       1,
   "energies_eV":           [[[...], ...], ...]  // shape: [n_sel][nkx][nky]
 }
 ```
+
+Legacy wide-format input instead yields separable 1D axes:
+
+```json
+"band_grid_preview": {
+  "kx": [...], "ky": [...],
+  "selected_band_indices": [...],
+  "band_index_base": 0,
+  "energies_eV": [[[...], ...], ...]
+}
+```
+
+Clients must check `band_index_base` before mapping indices back to
+solver band numbers.
+
+### 2.5b `quantum_geometry_preview`
+
+Downsampled view of `quantum_geometry.dat` (band-resolved Berry
+curvature, quantum metric trace, valley assignment):
+
+```json
+"quantum_geometry_preview": {
+  "selected_band_indices":    [...],
+  "band_index_base":          1,
+  "kx_grid":                  [[...], ...],
+  "ky_grid":                  [[...], ...],
+  "berry_curvature_au":       [[[...], ...], ...],  // [n_sel][nkx][nky]
+  "trace_quantum_metric_au":  [[[...], ...], ...],  // gxx+gyy
+  "valley_id":                [[...], ...],          // int grid, 0=unassigned
+  "note": "PT-symmetric AFM: Omega_n(k) ~ 0 ... not a data error."
+}
+```
+
+The `note` is mandatory for CrI3 AFM datasets: PT symmetry forces the
+Berry curvature to the numerical floor, and any viewer that "fixes"
+this by rescaling would be fabricating physics.
+
+### 2.5c `occupation_preview`
+
+Downsampled snapshots from the solver's Tier-0 diagnostic
+`occupation_kt.dat` (`save_occupation` in `&output`):
+
+```json
+"occupation_preview": {
+  "kx_grid": [[...], ...],
+  "ky_grid": [[...], ...],
+  "snapshots": [
+    {
+      "time_fs":      0.0,
+      "n_val":        [[...], ...],   // sum of valence-band rho_nn
+      "n_cond":       [[...], ...],   // sum of conduction-band rho_nn
+      "delta_n_cond": [[...], ...]    // n_cond(t) - n_cond(t0)
+    }
+  ],
+  "definition": "..."
+}
+```
+
+`delta_n_cond` is the recommended quantity to render: the equilibrium
+offset cancels and the laser-driven transfer becomes visually obvious.
+Snapshot count in JSON is capped by `--max-occ-snapshots` (default 8);
+the full snapshot set stays in the optional `.npz` or in the local
+`occupation_kt.dat`.
 
 ### 2.6 `field`
 

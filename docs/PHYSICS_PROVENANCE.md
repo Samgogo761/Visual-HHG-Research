@@ -59,34 +59,44 @@ Examples in v0:
 
 ---
 
-## 2. First-demo provenance map
+## 2. Demo provenance map
 
-The first demo bundle (`lg_cov_k40_nb104_T2_0p5cycle (+N benchmark)`)
+With the verify_obs-generation solver outputs
+(`output_verify_obs_nb112_T2_0p5cycle` and successors), a real run
 supports **`Data-driven`** visualization of:
 
 ```
 J(t)
-HHG spectrum
-band energies
+HHG spectrum (charge and spin-z)
+band energies (k-grid and k-path)
 intraband/interband current decomposition
-valley-resolved current
+valley-resolved current and valley polarization eta
+spin-z current J^{s_z}(t)
+quantum geometry: Berry curvature, quantum metric trace, valley map
+k-space occupation n_val/n_cond(k,t)      [requires save_occupation=.true. in the run]
+band-resolved occupation rho_nn(k,t)      [requires occ_band_resolved=.true.]
 ```
 
 It does **not** yet support `Data-driven` visualization of:
 
 ```
-k-space occupation rho(k,t)
-band-resolved population f_n(k,t)
-interband coherence |rho_mn(k,t)|
-full density matrix dynamics
-quantum-light statistics
-production-route Berry curvature in lg_cov
+native E(t)/A(t)                  (solver patch pending, SOLVER_EXPORT_REQUESTS.md Item 1)
+interband coherence |rho_mn(k,t)| (solver patch pending, Item 2)
+full density matrix dynamics      (intentionally not exported)
+quantum-light statistics          (BSV module exists solver-side; out of v0 scope)
 ```
 
 These quantities are listed under `missing_modules` in the manifest and
 must not be silently faked. If a prototype needs a placeholder rho(k,t),
 that placeholder must be labeled `Model-based` (or `Conceptual-only`),
 not `Data-driven`.
+
+Physics caveat that viewers must preserve: bilayer CrI3 AFM is
+PT-symmetric, so the band-resolved Berry curvature `Omega_n(k)` sits at
+the numerical floor. A near-zero Berry curvature panel is the **correct
+physical statement** (it proves the anomalous current vanishes), not a
+broken dataset. Do not rescale it into something that looks
+interesting.
 
 ---
 

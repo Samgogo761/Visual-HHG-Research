@@ -5,7 +5,7 @@
     "source_class": "Model-based",
     "material": "bilayer CrI3 AFM",
     "model": "Wannier-SBE",
-    "gauge_method": "lg_cov",
+    "gauge_method": "matrix_vg",
     "confidence": "synthetic demo bundle; curves are illustrative only, do not use as physical references"
   },
   "units": {
@@ -14,13 +14,18 @@
     "energy": "eV",
     "k": "1/bohr",
     "omega": "a.u.",
-    "hhg": "|J(omega)|^2 solver scaling"
+    "hhg": "|J(omega)|^2 solver scaling",
+    "berry_curvature": "a.u.",
+    "quantum_metric": "a.u.",
+    "occupation": "electrons per k-point (dimensionless)"
   },
   "dimensions": {
     "nt": 600,
     "nkx": 8,
     "nky": 8,
-    "n_bands": 12
+    "n_bands": 12,
+    "n_valence": 8,
+    "n_occupation_snapshots": 6
   },
   "available_modules": [
     "current_time_series",
@@ -29,13 +34,17 @@
     "band_grid",
     "current_decomposition",
     "valley_current",
+    "spin_current",
+    "hhg_spin",
+    "quantum_geometry",
+    "k_space_occupation",
     "field_time_series"
   ],
   "missing_modules": [
-    "k_space_occupation",
-    "rho_k_t",
-    "production_lg_cov_berry_curvature",
-    "solver_output_Et_At"
+    "band_resolved_occupation",
+    "solver_output_Et_At",
+    "interband_coherence_norm",
+    "rho_k_t_full_density_matrix"
   ],
   "files": {
     "data_small": "data_small.json",
@@ -45,9 +54,13 @@
     "run_dir": "<LOCAL_SBE_RUN_DIR>",
     "Jt": "<LOCAL_SBE_RUN_DIR>/Jt.dat",
     "HHG": "<LOCAL_SBE_RUN_DIR>/HHG.dat",
+    "HHG_spin": "<LOCAL_SBE_RUN_DIR>/HHG_spin.dat",
     "bands": "<LOCAL_SBE_RUN_DIR>/bands.dat",
     "Jt_decomposed": "<LOCAL_SBE_RUN_DIR>/Jt_decomposed.dat",
     "Jt_valley": "<LOCAL_SBE_RUN_DIR>/Jt_valley.dat",
+    "Jt_spin": "<LOCAL_SBE_RUN_DIR>/Jt_spin.dat",
+    "quantum_geometry": "<LOCAL_SBE_RUN_DIR>/quantum_geometry.dat",
+    "occupation_kt": "<LOCAL_SBE_RUN_DIR>/occupation_kt.dat",
     "input_nml": "<LOCAL_SBE_RUN_DIR>/input.nml",
     "run_log": "<LOCAL_SBE_RUN_DIR>/run.log",
     "band_path": "<LOCAL_WANNIER_DIR>/CrI3_band.dat"

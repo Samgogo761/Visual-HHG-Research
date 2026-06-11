@@ -1,13 +1,43 @@
-# RHO_EXPORT_SPEC.md — Future solver exports for rho(k,t)
+# RHO_EXPORT_SPEC.md — Solver exports for rho(k,t)
 
-This document specifies the **future** density-matrix export format that
-the Wannier-SBE solver should emit so that HHG-XR Lab can visualize
-k-space occupation `f_n(k,t)`, population change `delta_f_n(k,t)`, and
-interband coherence on a 2D Brillouin-zone grid.
+This document specifies the density-matrix export path that lets
+HHG-XR Lab visualize k-space occupation `f_n(k,t)`, population change
+`delta_f_n(k,t)`, and interband coherence on a 2D Brillouin-zone grid.
 
-The current v0 demo bundle does **not** include any of these arrays.
-They are listed under `missing_modules` in the manifest until the solver
-produces them.
+## 0. What the solver already implements (2026-06 status)
+
+The Quantum-light solver (`src/mod_sbe.f90`) **already contains** a
+Tier-0 snapshot exporter, controlled by the `&output` namelist:
+
+```fortran
+&output
+  save_occupation   = .true.
+  occ_stride        = 100      ! 0 => ~40 auto
+  occ_band_resolved = .true.
+/
+```
+
+Existing output formats (plain text, snapshot-appended):
+
+```
+occupation_kt.dat        # it time_fs ikx iky kx ky n_val n_cond
+occupation_band_kt.dat   # it time_fs ikx iky band occupation
+```
+
+`tools/convert_sbe_run.py` reads `occupation_kt.dat` directly and emits
+the `occupation_preview` block of `data_small.json`; the manifest then
+lists `k_space_occupation` under `available_modules`.
+
+What is **still missing** solver-side is only the interband coherence
+norm (see `SOLVER_EXPORT_REQUESTS.md`, Item 2):
+
+```
+coherence_kt.dat         # it time_fs ikx iky kx ky coherence_norm
+```
+
+The `.npz`-based snapshot layout below remains the spec for the
+*converter-side packaging* of these text files, and for any future
+solver that prefers binary output.
 
 ---
 

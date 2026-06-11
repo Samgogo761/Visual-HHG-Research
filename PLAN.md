@@ -72,15 +72,38 @@ omega:       a.u.
 HHG:         |J(omega)|^2 with solver-specific scaling
 ```
 
-### 1.3 Missing data (v0)
+### 1.2b Newer verify_obs run (2026-06-10)
+
+A second baseline now exists with the new observables enabled:
 
 ```
-E(t) / A(t) original solver output
-k-space occupation rho(k,t)
-band-resolved population f_n(k,t)
-interband coherence |rho_mn(k,t)|
-production-route Berry curvature for lg_cov
+output_verify_obs_nb112_T2_0p5cycle/   (gauge_method = matrix_vg, nkx=nky=46, bands 1..112, nv=84)
+  bands.dat              (~11.7 MB, long format: ikx iky n E kx ky)
+  HHG.dat / HHG_spin.dat
+  Jt.dat / Jt_decomposed.dat / Jt_valley.dat / Jt_spin.dat
+  quantum_geometry.dat   (~23.6 MB: ikx iky band kx ky E Omega gxx gyy gxy valley)
+  input.nml / run        (log file named `run`, no extension)
 ```
+
+All time-series files carry a leading `it` index column; the converter
+handles both this and the legacy time-first layout.
+
+### 1.3 Missing data (current)
+
+```
+E(t) / A(t) original solver output        -> small solver patch, see docs/SOLVER_EXPORT_REQUESTS.md Item 1
+interband coherence |rho_mn(k,t)|         -> small solver patch, Item 2
+full complex density matrix rho_mn(k,t)   -> intentionally not exported (size)
+```
+
+**Resolved since v0:** k-space occupation `rho_nn(k,t)` is NOT missing
+capability — the solver already implements Tier-0 snapshots
+(`occupation_kt.dat`, `occupation_band_kt.dat`) behind the
+`save_occupation` / `occ_band_resolved` flags in `&output`. The
+verify_obs run simply had `save_occupation = .false.`. Re-running with
+the flags on requires no code change (Item 0 in
+`docs/SOLVER_EXPORT_REQUESTS.md`). Quantum geometry (Berry curvature +
+metric + valley map) is likewise now produced by `save_geometry`.
 
 Field reconstruction history:
 

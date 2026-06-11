@@ -44,17 +44,19 @@ Visual-HHG-Research/
   .gitattributes
 
   docs/
-    DATA_SCHEMA.md          # manifest.json + data_small.json schema
-    PHYSICS_PROVENANCE.md   # provenance labels and what is real vs. reconstructed
-    UNREAL_IMPORT.md        # how an Unreal client reads the bundle
-    RHO_EXPORT_SPEC.md      # future solver export spec for rho(k,t)
-    ROADMAP.md              # phased roadmap
+    DATA_SCHEMA.md             # manifest.json + data_small.json schema
+    PHYSICS_PROVENANCE.md      # provenance labels and what is real vs. reconstructed
+    UNREAL_IMPORT.md           # how an Unreal client reads the bundle
+    RHO_EXPORT_SPEC.md         # rho(k,t) export spec (solver Tier-0 + future coherence)
+    SOLVER_EXPORT_REQUESTS.md  # concrete asks for the Quantum-light solver side
+    ROADMAP.md                 # phased roadmap
 
   tools/
-    convert_sbe_run.py      # raw .dat -> data_small.json + manifest.json
-    sanitize_manifest.py    # strip private absolute paths from any manifest
-    make_quicklook.py       # 4-panel preview PNG
-    validate_demo_bundle.py # schema + safety checks on a bundle
+    convert_sbe_run.py        # raw .dat -> data_small.json + manifest.json
+    sanitize_manifest.py      # strip private absolute paths from any manifest
+    make_quicklook.py         # 4-panel preview PNG
+    validate_demo_bundle.py   # schema + safety checks on a bundle
+    make_synthetic_bundle.py  # regenerate the committed synthetic sample
 
   configs/
     demo_lgcov_k40_nb104.sample.yaml
