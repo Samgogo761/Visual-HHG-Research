@@ -39,10 +39,22 @@ def test_manifest_required_keys() -> None:
 def test_missing_modules_is_explicit() -> None:
     manifest = json.loads((BUNDLE / "manifest.json").read_text())
     assert isinstance(manifest["missing_modules"], list)
-    for must in ("rho_k_t", "k_space_occupation"):
+    for must in ("rho_k_t_full_density_matrix", "interband_coherence_norm"):
         assert must in manifest["missing_modules"], (
             f"v0 demo must declare {must} as missing; do not hide it"
         )
+
+
+def test_occupation_module_in_sample_bundle() -> None:
+    """The committed synthetic bundle ships an occupation_preview so the
+    Unreal loader can be developed against the k_space_occupation module
+    before the real solver rerun lands."""
+    manifest = json.loads((BUNDLE / "manifest.json").read_text())
+    data_small = json.loads((BUNDLE / "data_small.json").read_text())
+    assert "k_space_occupation" in manifest["available_modules"]
+    occ = data_small.get("occupation_preview") or {}
+    assert occ.get("snapshots"), "occupation_preview.snapshots must be non-empty"
+    assert "definition" in occ
 
 
 def test_field_source_label_is_allowed() -> None:

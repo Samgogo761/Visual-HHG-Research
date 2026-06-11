@@ -1,8 +1,11 @@
-"""Converter pipeline test using synthetic .dat files.
+"""Converter pipeline test using synthetic .dat files in the REAL solver formats.
 
-We do not commit real SBE outputs, so this test materializes synthetic
-files in a temporary directory, runs convert_sbe_run.main(), and asserts
-that the resulting bundle passes validate_demo_bundle.validate().
+The synthetic writers live in tools/make_synthetic_bundle.py (single
+source of truth, also used to regenerate the committed sample bundle).
+They mimic the Quantum-light solver output layouts: leading `it` index
+column on time series, long-format bands.dat with `# nkx= nky= n_trunc=`
+header, Jt_spin / HHG_spin / quantum_geometry / occupation_kt files, and
+a log file named `run`.
 
 Run with:
     pytest tests/test_converter_with_synthetic_data.py
@@ -23,109 +26,128 @@ sys.path.insert(0, str(REPO / "tools"))
 import convert_sbe_run as cv  # noqa: E402
 import validate_demo_bundle as vd  # noqa: E402
 import sanitize_manifest as san  # noqa: E402
+from make_synthetic_bundle import (  # noqa: E402
+    write_synthetic_run,
+    write_synthetic_band_path,
+)
 
 
-def _write_synthetic_run(run_dir: Path, nt: int = 600, nkx: int = 8, nky: int = 8, n_bands: int = 12) -> None:
-    run_dir.mkdir(parents=True, exist_ok=True)
-    t = np.linspace(-20.0, 20.0, nt)
-    jx = np.sin(0.5 * t) * np.exp(-0.005 * t**2)
-    jy = np.cos(0.5 * t) * np.exp(-0.005 * t**2)
-    np.savetxt(run_dir / "Jt.dat", np.column_stack([t, jx, jy, np.zeros_like(t)]))
-
-    np.savetxt(run_dir / "Jt_decomposed.dat",
-               np.column_stack([t, 0.6*jx, 0.6*jy, 0.4*jx, 0.4*jy, jx, jy, 0*jx]))
-    np.savetxt(run_dir / "Jt_valley.dat",
-               np.column_stack([t, 0.5*jx, 0.5*jy, 0.5*jx, 0.5*jy, jx, jy, 0*jx]))
-
-    n_omega = 200
-    order = np.arange(1, n_omega + 1)
-    omega_au = 0.057 * order
-    spec_x = 1.0 / (1.0 + (order - 11)**2)
-    spec_y = 0.6 * spec_x
-    spec_t = spec_x + spec_y
-    np.savetxt(run_dir / "HHG.dat",
-               np.column_stack([order, omega_au, spec_x, spec_y, spec_t]))
-
-    kx = np.linspace(-0.5, 0.5, nkx)
-    ky = np.linspace(-0.5, 0.5, nky)
-    rows = []
-    for i, kxi in enumerate(kx):
-        for j, kyj in enumerate(ky):
-            energies = [0.5 * (kxi**2 + kyj**2) + 0.3 * b for b in range(n_bands)]
-            rows.append([kxi, kyj, *energies])
-    np.savetxt(run_dir / "bands.dat", np.array(rows))
-
-    (run_dir / "input.nml").write_text(
-        "&laser\n"
-        "  lambda_nm = 3200.0,\n"
-        "  n_cycles  = 4.0,\n"
-        "  E0_au     = 0.005,\n"
-        "/\n"
-    )
-    (run_dir / "run.log").write_text("synthetic test run\n")
-
-
-def _write_synthetic_band_path(path: Path, n_k: int = 80, n_bands: int = 10) -> None:
-    k = np.linspace(0.0, 1.0, n_k)
-    cols = [k]
-    for b in range(n_bands):
-        cols.append(np.cos(np.pi * k) * 0.3 + 0.4 * b)
-    np.savetxt(path, np.column_stack(cols))
-
-
-def test_converter_end_to_end(tmp_path: Path) -> None:
-    run_dir = tmp_path / "lgcov_k8_nb12_synthetic"
-    band_path = tmp_path / "wannier" / "CrI3_band.dat"
-    band_path.parent.mkdir(parents=True)
-    _write_synthetic_run(run_dir, nt=600, nkx=8, nky=8, n_bands=12)
-    _write_synthetic_band_path(band_path, n_k=80, n_bands=10)
-
-    out_dir = tmp_path / "bundle_out"
-    rc = cv.main([
+def _convert(run_dir: Path, out_dir: Path, band_path: Path | None = None,
+             extra: list[str] | None = None) -> int:
+    argv = [
         "--run-dir", str(run_dir),
-        "--band-path", str(band_path),
         "--out-dir", str(out_dir),
         "--max-points-current", "300",
         "--max-points-spectrum", "200",
-        "--selected-bands", "2:6",
+        "--selected-bands", "3:7",
         "--max-grid", "8",
+        "--max-occ-snapshots", "4",
         "--dataset-name", "synthetic_test_dataset",
-    ])
-    assert rc == 0
+    ]
+    if band_path is not None:
+        argv += ["--band-path", str(band_path)]
+    return cv.main(argv + (extra or []))
 
-    assert (out_dir / "manifest.json").is_file()
-    assert (out_dir / "data_small.json").is_file()
+
+def test_converter_end_to_end(tmp_path: Path) -> None:
+    run_dir = tmp_path / "synthetic_run"
+    band_path = tmp_path / "wannier" / "CrI3_band.dat"
+    band_path.parent.mkdir(parents=True)
+    write_synthetic_run(run_dir, nt=600, nkx=8, nky=8, n_bands=12)
+    write_synthetic_band_path(band_path, n_k=80, n_bands=10)
+
+    out_dir = tmp_path / "bundle_out"
+    assert _convert(run_dir, out_dir, band_path) == 0
 
     issues = vd.validate(out_dir, max_mb=10, total_max_mb=25)
     assert issues.ok, "\n".join(issues.errors)
 
     manifest = json.loads((out_dir / "manifest.json").read_text())
     assert manifest["schema"] == "hhgxr-demo-bundle-v0"
-    assert "current_time_series" in manifest["available_modules"]
-    assert "hhg_spectrum" in manifest["available_modules"]
-    assert "band_grid" in manifest["available_modules"]
-    assert "rho_k_t" in manifest["missing_modules"]
+    for mod in ("current_time_series", "hhg_spectrum", "band_grid",
+                "current_decomposition", "valley_current",
+                "spin_current", "hhg_spin", "quantum_geometry",
+                "k_space_occupation"):
+        assert mod in manifest["available_modules"], f"{mod} should be available"
+    for mod in ("interband_coherence_norm", "rho_k_t_full_density_matrix",
+                "solver_output_Et_At"):
+        assert mod in manifest["missing_modules"], f"{mod} should be missing"
+
+    # gauge label comes from input.nml &method when not overridden
+    assert manifest["physics_provenance"]["gauge_method"] == "matrix_vg"
+    assert manifest["dimensions"]["n_valence"] == 8
 
     src = manifest.get("source_paths") or {}
     for v in src.values():
-        assert v.startswith("<LOCAL_") or v == "<LOCAL_SBE_RUN_DIR>", (
-            f"source_paths value not sanitized: {v!r}"
-        )
+        assert v.startswith("<LOCAL_"), f"source_paths value not sanitized: {v!r}"
 
-    data_small = json.loads((out_dir / "data_small.json").read_text())
-    field = data_small.get("field") or {}
-    assert field["source"] == "reconstructed_from_input_nml_not_raw_output"
-    for k in ("Ex", "Ey", "Ax", "Ay"):
-        assert k in field and len(field[k]) == len(field["time_fs"]), (
-            f"field.{k} missing or wrong length"
-        )
-    assert field.get("reconstructed_from") == ["input.nml", "mod_laser.f90", "mod_params.f90"]
-    assert "solver_output_Et_At" in manifest["missing_modules"]
+
+def test_time_axis_is_time_not_step_index(tmp_path: Path) -> None:
+    """Real Jt.dat starts with an `it` index column; time_fs must come
+    from column 1, not column 0. The synthetic time grid starts at
+    -20 fs, so index/time confusion is unmistakable."""
+    run_dir = tmp_path / "run"
+    write_synthetic_run(run_dir, nt=400, nkx=6, nky=6, n_bands=8)
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir) == 0
+
+    ds = json.loads((out_dir / "data_small.json").read_text())
+    t = ds["time_series"]["time_fs"]
+    assert t[0] == pytest.approx(-20.0), "time_fs[0] looks like a step index, not time"
+    assert "eta_x" in ds["time_series"] and "eta_y" in ds["time_series"]
+    assert "Jx_spin" in ds["time_series"]
+
+
+def test_bands_long_format_and_geometry(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=10)
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir) == 0
+
+    ds = json.loads((out_dir / "data_small.json").read_text())
+    bgp = ds["band_grid_preview"]
+    assert bgp["band_index_base"] == 1
+    assert bgp["selected_band_indices"] == [3, 4, 5, 6]
+    assert "kx_grid" in bgp and "ky_grid" in bgp, "long format must emit 2D grids"
+    n_sel = len(bgp["selected_band_indices"])
+    assert len(bgp["energies_eV"]) == n_sel
+
+    qgp = ds["quantum_geometry_preview"]
+    assert "berry_curvature_au" in qgp and "trace_quantum_metric_au" in qgp
+    assert "valley_id" in qgp
+    assert "PT-symmetric" in qgp["note"]
+
+
+def test_occupation_preview(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=8, n_occ_snapshots=6)
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir) == 0
+
+    ds = json.loads((out_dir / "data_small.json").read_text())
+    occ = ds["occupation_preview"]
+    assert 2 <= len(occ["snapshots"]) <= 5  # max-occ-snapshots=4 (+last)
+    first = occ["snapshots"][0]
+    assert np.allclose(np.asarray(first["delta_n_cond"]), 0.0), \
+        "delta_n_cond at the first snapshot must vanish by construction"
+    rows = len(occ["kx_grid"])
+    assert len(first["n_cond"]) == rows
+
+
+def test_no_occupation_means_module_missing(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=8,
+                        with_occupation=False)
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir) == 0
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert "k_space_occupation" in manifest["missing_modules"]
+    assert "k_space_occupation" not in manifest["available_modules"]
 
 
 def test_converter_promotes_to_raw_when_Et_dat_present(tmp_path: Path) -> None:
-    run_dir = tmp_path / "lgcov_with_raw_field"
-    _write_synthetic_run(run_dir, nt=400, nkx=6, nky=6, n_bands=8)
+    run_dir = tmp_path / "run_with_raw_field"
+    write_synthetic_run(run_dir, nt=400, nkx=6, nky=6, n_bands=8)
     t = np.linspace(-10.0, 10.0, 400)
     ex = 0.005 * np.cos(0.5 * t) * np.exp(-0.01 * t**2)
     ey = np.zeros_like(t)
@@ -133,19 +155,10 @@ def test_converter_promotes_to_raw_when_Et_dat_present(tmp_path: Path) -> None:
     ay = np.zeros_like(t)
     it = np.arange(1, 401)
     np.savetxt(run_dir / "Et.dat", np.column_stack([it, t, ex, ey, ax, ay]),
-               header="it time_fs Ex_au Ey_au Ax_au Ay_au")
+               header="it  time(fs)  Ex(a.u.)  Ey(a.u.)  Ax(a.u.)  Ay(a.u.)")
 
     out_dir = tmp_path / "bundle_out_raw"
-    rc = cv.main([
-        "--run-dir", str(run_dir),
-        "--out-dir", str(out_dir),
-        "--max-points-current", "200",
-        "--max-points-spectrum", "150",
-        "--selected-bands", "1:4",
-        "--max-grid", "6",
-        "--dataset-name", "synthetic_raw_field_dataset",
-    ])
-    assert rc == 0
+    assert _convert(run_dir, out_dir) == 0
 
     manifest = json.loads((out_dir / "manifest.json").read_text())
     data_small = json.loads((out_dir / "data_small.json").read_text())

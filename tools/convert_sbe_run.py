@@ -1,15 +1,27 @@
 #!/usr/bin/env python3
-"""Convert a Wannier-SBE run directory into a sanitized HHG-XR Lab demo bundle.
+"""Convert a Quantum-light SBE run directory into a sanitized HHG-XR Lab demo bundle.
 
-Reads (best effort, missing files are tolerated):
-    <run-dir>/Jt.dat
-    <run-dir>/HHG.dat
-    <run-dir>/bands.dat
-    <run-dir>/Jt_decomposed.dat
-    <run-dir>/Jt_valley.dat
-    <run-dir>/input.nml
-    <run-dir>/run.log
-    <band-path>             (optional, e.g. wannier/CrI3_band.dat)
+Column formats follow the writers in the Quantum-light solver
+(https://github.com/Samgogo761/Quantum-light, src/mod_current.f90,
+mod_hhg.f90, mod_crystal.f90, mod_geometry.f90, mod_spin.f90,
+mod_sbe.f90):
+
+    Jt.dat                 # it time(fs) Jx Jy
+    Jt_decomposed.dat      # it time(fs) Jx_intra Jy_intra Jx_inter Jy_inter Jx_tot Jy_tot
+    Jt_valley.dat          # it time(fs) Jx_K Jy_K Jx_Kp Jy_Kp eta_x eta_y
+    Jt_spin.dat            # it time(fs) Jx_spin Jy_spin
+    HHG.dat                # harmonic_order omega(a.u.) HHG_x HHG_y HHG_total
+    HHG_spin.dat           # same layout as HHG.dat
+    bands.dat              # header '# nkx=.. nky=.. n_trunc=..'; rows: ikx iky n E(eV) kx ky
+    quantum_geometry.dat   # ikx iky band kx ky E(eV) Omega gxx gyy gxy valley
+    occupation_kt.dat      # it time_fs ikx iky kx ky n_val n_cond      (save_occupation)
+    occupation_band_kt.dat # it time_fs ikx iky band occupation         (occ_band_resolved)
+    Et.dat / At.dat        # it time(fs) Ex Ey Ax Ay   (future native export)
+    input.nml              # &laser wvl_nm intensity_Wcm2 ncyc ... ; &method gauge_method
+    run.log or run         # stdout log (omega0 / T_total / nt scraped when present)
+
+Legacy layouts (time in the first column, wide-format bands.dat rows of
+kx ky e1..eN) are still accepted as a fallback.
 
 Writes:
     <out-dir>/manifest.json
@@ -30,7 +42,7 @@ import json
 import math
 import re
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +52,10 @@ SCHEMA = "hhgxr-demo-bundle-v0"
 
 RUN_DIR_PLACEHOLDER = "<LOCAL_SBE_RUN_DIR>"
 WANNIER_PLACEHOLDER = "<LOCAL_WANNIER_DIR>"
+
+C_NM_PER_FS = 299.792458
+AU_TIME_FS = 0.024188843265857   # 1 a.u. of time in fs (matches mod_params.f90)
+WCM2_TO_AU = 1.0 / 3.50944758e16  # intensity to E0^2 (matches mod_params.f90)
 
 
 # ----------------------------------------------------------------------
@@ -61,12 +77,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--max-points-spectrum", type=int, default=800,
                    help="Downsample target for HHG spectrum in data_small.json.")
     p.add_argument("--selected-bands", default="80:90",
-                   help="Slice (a:b) of band indices to include in band_grid_preview.")
+                   help="Slice (a:b) of band indices for grid/geometry previews. "
+                        "1-based to match solver band numbering when reading "
+                        "long-format files; 0-based for legacy wide format.")
     p.add_argument("--max-grid", type=int, default=40,
-                   help="Maximum kx/ky grid points kept in band_grid_preview.")
+                   help="Maximum kx/ky grid points kept in grid previews.")
+    p.add_argument("--max-occ-snapshots", type=int, default=8,
+                   help="Maximum occupation snapshots kept in data_small.json.")
     p.add_argument("--emit-npz", action="store_true",
                    help="Also write data_arrays.npz at original resolution. Off by default.")
-    p.add_argument("--gauge-method", default="lg_cov")
+    p.add_argument("--gauge-method", default=None,
+                   help="Override gauge label. Default: read &method gauge_method "
+                        "from input.nml, else 'unknown'.")
     p.add_argument("--material", default="bilayer CrI3 AFM")
     p.add_argument("--model", default="Wannier-SBE")
     p.add_argument("--source-class", default="Data-driven",
@@ -97,14 +119,17 @@ def sanitize_band_path(band_path: Path | None) -> str | None:
 
 
 # ----------------------------------------------------------------------
-# .dat readers
+# Low-level readers
 # ----------------------------------------------------------------------
 
 def _read_columns(path: Path) -> np.ndarray | None:
     if not path.exists():
         return None
     try:
-        return np.loadtxt(path, comments=["#", "!"])
+        arr = np.loadtxt(path, comments=["#", "!"])
+        if arr.ndim == 1:
+            arr = arr[None, :]
+        return arr
     except Exception as exc:
         print(f"[warn] failed to read {path.name}: {exc}", file=sys.stderr)
         return None
@@ -117,8 +142,28 @@ def downsample(a: np.ndarray, n_target: int) -> np.ndarray:
     return a[::stride]
 
 
+def split_time_table(arr: np.ndarray | None) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Split a time-series table into (time_fs, data_columns).
+
+    Solver format has a leading integer step index:  it time(fs) data...
+    Legacy format starts directly with time:          time data...
+    """
+    if arr is None or arr.ndim != 2 or arr.shape[1] < 2:
+        return None, None
+    c0 = arr[:, 0]
+    looks_like_index = (
+        arr.shape[1] >= 3
+        and np.allclose(c0, np.round(c0))
+        and c0.size >= 2
+        and np.allclose(np.diff(c0), 1.0)
+    )
+    if looks_like_index:
+        return arr[:, 1], arr[:, 2:]
+    return arr[:, 0], arr[:, 1:]
+
+
 # ----------------------------------------------------------------------
-# input.nml parsing
+# input.nml / run log parsing
 # ----------------------------------------------------------------------
 
 _NML_PAIR = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^!,\n]+?)\s*(?:,|$|!)", re.MULTILINE)
@@ -147,42 +192,110 @@ def parse_input_nml(path: Path) -> dict[str, Any]:
     return out
 
 
+def parse_run_log(run_dir: Path) -> dict[str, Any]:
+    """Best-effort scrape of the run log (run.log or run) for cross-check values."""
+    path = run_dir / "run.log"
+    if not path.exists():
+        path = run_dir / "run"
+    if not path.exists():
+        return {}
+    text = path.read_text(errors="ignore")
+    out: dict[str, Any] = {}
+    patterns = {
+        "omega0_au":  re.compile(r"omega0[_\s:]*=?\s*([+-]?\d+\.?\d*(?:[eEdD][+-]?\d+)?)"),
+        "T_total_fs": re.compile(r"T[_\s]*total\s*[:=]\s*([+-]?\d+\.?\d*(?:[eEdD][+-]?\d+)?)"),
+        "nt":         re.compile(r"\bnt\s*[:=]?\s*(\d+)\b"),
+    }
+    for key, pat in patterns.items():
+        m = pat.search(text)
+        if not m:
+            continue
+        val = m.group(1).replace("D", "E").replace("d", "e")
+        try:
+            out[key] = int(val) if key == "nt" else float(val)
+        except ValueError:
+            pass
+    return out
+
+
 # ----------------------------------------------------------------------
-# bands.dat reader
+# bands.dat reader (solver long format + legacy wide fallback)
 # ----------------------------------------------------------------------
 
 @dataclass
 class BandGrid:
-    kx: np.ndarray
-    ky: np.ndarray
-    energies: np.ndarray  # shape (n_bands, nkx, nky)
+    energies: np.ndarray             # (n_bands, nkx, nky), eV
     nkx: int
     nky: int
     n_bands: int
+    kx: np.ndarray | None = None     # (nkx,) legacy separable grid
+    ky: np.ndarray | None = None     # (nky,)
+    kx_grid: np.ndarray | None = None  # (nkx, nky) cartesian, non-separable lattices
+    ky_grid: np.ndarray | None = None
+    layout: str = "long"
+
+
+_BANDS_HEADER = re.compile(r"nkx\s*=\s*(\d+).*?nky\s*=\s*(\d+).*?n_trunc\s*=\s*(\d+)")
+
+
+def _read_bands_header(path: Path) -> tuple[int, int, int] | None:
+    try:
+        with path.open(errors="ignore") as fh:
+            for _ in range(5):
+                line = fh.readline()
+                if not line:
+                    break
+                m = _BANDS_HEADER.search(line)
+                if m:
+                    return int(m.group(1)), int(m.group(2)), int(m.group(3))
+    except OSError:
+        pass
+    return None
 
 
 def read_bands_grid(path: Path) -> BandGrid | None:
-    """Tolerant reader.
+    """Read bands.dat.
 
-    Expected layout: rows of (kx, ky, e1, e2, ..., e_nbands).
-    Returns None if shape cannot be inferred.
+    Solver long format: '# nkx=.. nky=.. n_trunc=..' header, then rows of
+        ikx iky n E(eV) kx(1/bohr) ky(1/bohr)
+    Legacy wide format: rows of  kx ky e1 e2 ... eN.
     """
     raw = _read_columns(path)
     if raw is None or raw.ndim != 2 or raw.shape[1] < 3:
         return None
+
+    int_like = [
+        np.allclose(raw[:, c], np.round(raw[:, c])) for c in range(min(3, raw.shape[1]))
+    ]
+    if raw.shape[1] == 6 and all(int_like):
+        ikx = raw[:, 0].astype(int)
+        iky = raw[:, 1].astype(int)
+        n   = raw[:, 2].astype(int)
+        hdr = _read_bands_header(path)
+        if hdr:
+            nkx, nky, n_bands = hdr
+        else:
+            nkx, nky, n_bands = ikx.max(), iky.max(), n.max()
+        energies = np.full((n_bands, nkx, nky), np.nan, dtype=np.float32)
+        kx_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
+        ky_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
+        energies[n - 1, ikx - 1, iky - 1] = raw[:, 3]
+        kx_grid[ikx - 1, iky - 1] = raw[:, 4]
+        ky_grid[ikx - 1, iky - 1] = raw[:, 5]
+        return BandGrid(energies=energies, nkx=nkx, nky=nky, n_bands=n_bands,
+                        kx_grid=kx_grid, ky_grid=ky_grid, layout="long")
+
+    # legacy wide format
     kx_col = raw[:, 0]
     ky_col = raw[:, 1]
     e_cols = raw[:, 2:]
     n_bands = e_cols.shape[1]
-
     kx_unique = np.unique(kx_col)
     ky_unique = np.unique(ky_col)
     nkx, nky = kx_unique.size, ky_unique.size
-
     if nkx * nky != raw.shape[0]:
         print(f"[warn] bands.dat rows {raw.shape[0]} != nkx*nky {nkx*nky}; "
-              f"using best-effort grid (truncating)", file=sys.stderr)
-
+              f"best-effort wide-format grid", file=sys.stderr)
     energies = np.full((n_bands, nkx, nky), np.nan, dtype=np.float32)
     kx_idx = {v: i for i, v in enumerate(kx_unique)}
     ky_idx = {v: i for i, v in enumerate(ky_unique)}
@@ -192,33 +305,122 @@ def read_bands_grid(path: Path) -> BandGrid | None:
         if ix is None or iy is None:
             continue
         energies[:, ix, iy] = e_cols[r]
+    return BandGrid(energies=energies, nkx=nkx, nky=nky, n_bands=n_bands,
+                    kx=kx_unique.astype(np.float32),
+                    ky=ky_unique.astype(np.float32), layout="wide")
 
-    return BandGrid(kx_unique.astype(np.float32),
-                    ky_unique.astype(np.float32),
-                    energies, nkx, nky, n_bands)
 
-
-def parse_band_slice(spec: str, n_bands: int) -> list[int]:
+def parse_band_slice(spec: str, n_bands: int, one_based: bool) -> list[int]:
+    """Return 0-based band indices. For long-format (solver) files the CLI
+    slice is interpreted 1-based to match solver band numbering."""
+    if n_bands <= 0:
+        return []
     if not spec:
         return list(range(n_bands))
     if ":" in spec:
         a, b = spec.split(":", 1)
-        lo = int(a) if a else 0
+        lo = int(a) if a else (1 if one_based else 0)
         hi = int(b) if b else n_bands
     else:
         lo = int(spec)
         hi = lo + 1
+    if one_based:
+        lo, hi = lo - 1, hi - 1
     lo = max(0, lo)
     hi = min(n_bands, hi)
     return list(range(lo, hi))
 
 
 # ----------------------------------------------------------------------
-# Field: raw solver output (Et.dat / At.dat) and reconstruction
+# quantum_geometry.dat reader
 # ----------------------------------------------------------------------
 
-C_NM_PER_FS = 299.792458
+@dataclass
+class QuantumGeometry:
+    nkx: int
+    nky: int
+    n_bands: int
+    kx_grid: np.ndarray             # (nkx, nky)
+    ky_grid: np.ndarray
+    berry: np.ndarray               # (n_bands, nkx, nky)  Omega_n(k), a.u.
+    tr_metric: np.ndarray           # (n_bands, nkx, nky)  gxx+gyy, a.u.
+    valley_id: np.ndarray           # (nkx, nky) int
 
+
+def read_quantum_geometry(path: Path) -> QuantumGeometry | None:
+    """Read quantum_geometry.dat:
+        ikx iky band kx ky E(eV) Omega gxx gyy gxy valley
+    """
+    raw = _read_columns(path)
+    if raw is None or raw.ndim != 2 or raw.shape[1] < 11:
+        return None
+    ikx = raw[:, 0].astype(int)
+    iky = raw[:, 1].astype(int)
+    n   = raw[:, 2].astype(int)
+    nkx, nky, n_bands = ikx.max(), iky.max(), n.max()
+    kx_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
+    ky_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
+    berry = np.full((n_bands, nkx, nky), np.nan, dtype=np.float32)
+    trg = np.full((n_bands, nkx, nky), np.nan, dtype=np.float32)
+    valley = np.zeros((nkx, nky), dtype=np.int32)
+    kx_grid[ikx - 1, iky - 1] = raw[:, 3]
+    ky_grid[ikx - 1, iky - 1] = raw[:, 4]
+    berry[n - 1, ikx - 1, iky - 1] = raw[:, 6]
+    trg[n - 1, ikx - 1, iky - 1] = raw[:, 7] + raw[:, 8]
+    valley[ikx - 1, iky - 1] = raw[:, 10].astype(int)
+    return QuantumGeometry(nkx=nkx, nky=nky, n_bands=n_bands,
+                           kx_grid=kx_grid, ky_grid=ky_grid,
+                           berry=berry, tr_metric=trg, valley_id=valley)
+
+
+# ----------------------------------------------------------------------
+# occupation_kt.dat reader (Tier-0 diagnostic snapshots)
+# ----------------------------------------------------------------------
+
+@dataclass
+class OccupationSnapshots:
+    times_fs: np.ndarray            # (n_snap,)
+    nkx: int
+    nky: int
+    kx_grid: np.ndarray             # (nkx, nky)
+    ky_grid: np.ndarray
+    n_val: np.ndarray               # (n_snap, nkx, nky)
+    n_cond: np.ndarray              # (n_snap, nkx, nky)
+
+
+def read_occupation_kt(path: Path) -> OccupationSnapshots | None:
+    """Read occupation_kt.dat:  it time_fs ikx iky kx ky n_val n_cond."""
+    raw = _read_columns(path)
+    if raw is None or raw.ndim != 2 or raw.shape[1] < 8:
+        return None
+    it = raw[:, 0].astype(int)
+    snap_ids = np.unique(it)
+    ikx = raw[:, 2].astype(int)
+    iky = raw[:, 3].astype(int)
+    nkx, nky = ikx.max(), iky.max()
+    n_snap = snap_ids.size
+    times = np.zeros(n_snap)
+    kx_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
+    ky_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
+    n_val = np.full((n_snap, nkx, nky), np.nan, dtype=np.float32)
+    n_cond = np.full((n_snap, nkx, nky), np.nan, dtype=np.float32)
+    id_to_pos = {s: i for i, s in enumerate(snap_ids)}
+    for r in range(raw.shape[0]):
+        s = id_to_pos[it[r]]
+        ix, iy = ikx[r] - 1, iky[r] - 1
+        times[s] = raw[r, 1]
+        kx_grid[ix, iy] = raw[r, 4]
+        ky_grid[ix, iy] = raw[r, 5]
+        n_val[s, ix, iy] = raw[r, 6]
+        n_cond[s, ix, iy] = raw[r, 7]
+    return OccupationSnapshots(times_fs=times, nkx=nkx, nky=nky,
+                               kx_grid=kx_grid, ky_grid=ky_grid,
+                               n_val=n_val, n_cond=n_cond)
+
+
+# ----------------------------------------------------------------------
+# Field: raw solver output (Et.dat / At.dat) and reconstruction
+# ----------------------------------------------------------------------
 
 def read_field_dat(et_path: Path | None, at_path: Path | None) -> dict | None:
     """Read raw solver E(t) and/or A(t) files.
@@ -259,45 +461,13 @@ def read_field_dat(et_path: Path | None, at_path: Path | None) -> dict | None:
     }
 
 
-def _integrate_neg(field: np.ndarray, time_fs: np.ndarray) -> np.ndarray:
-    """A(t) = -integral E dt' from t[0] to t, using trapezoidal cumulation.
-
-    A(t[0]) is fixed to zero. Units: same as field (a.u.) since the
-    integration kernel is time in fs but we keep both fields in a.u.
-    consistently with the solver convention.
-    """
-    if field.size < 2:
-        return np.zeros_like(field)
+def _integrate_neg(field_arr: np.ndarray, time_fs: np.ndarray) -> np.ndarray:
+    """A(t) = -integral E dt' via trapezoidal cumulation, A(t0)=0."""
+    if field_arr.size < 2:
+        return np.zeros_like(field_arr)
     dt = np.diff(time_fs)
-    mids = 0.5 * (field[:-1] + field[1:])
-    a = np.concatenate(([0.0], -np.cumsum(mids * dt)))
-    return a
-
-
-def parse_run_log(path: Path) -> dict[str, Any]:
-    """Best-effort scrape of run.log for fields the laser cross-check uses."""
-    if not path.exists():
-        return {}
-    text = path.read_text(errors="ignore")
-    out: dict[str, Any] = {}
-    patterns = {
-        "omega0_au":  re.compile(r"omega0[_\s]*=?\s*([+-]?\d+\.?\d*(?:[eEdD][+-]?\d+)?)"),
-        "T_total_fs": re.compile(r"T[_\s]*total[_\s]*=?\s*([+-]?\d+\.?\d*(?:[eEdD][+-]?\d+)?)"),
-        "nt":         re.compile(r"\bnt\s*=?\s*(\d+)\b"),
-    }
-    for key, pat in patterns.items():
-        m = pat.search(text)
-        if not m:
-            continue
-        val = m.group(1).replace("D", "E").replace("d", "e")
-        try:
-            out[key] = int(val) if key == "nt" else float(val)
-        except ValueError:
-            pass
-    return out
-
-
-AU_TIME_FS = 0.024188843  # 1 atomic unit of time in fs
+    mids = 0.5 * (field_arr[:-1] + field_arr[1:])
+    return np.concatenate(([0.0], -np.cumsum(mids * dt)))
 
 
 def reconstruct_field(time_fs: np.ndarray,
@@ -306,24 +476,24 @@ def reconstruct_field(time_fs: np.ndarray,
                       nt_full: int | None = None) -> dict[str, Any]:
     """Cos-squared envelope reconstruction from input.nml plus run.log cross-check.
 
-    Returns a dict with Ex, Ey, Ax, Ay (numpy arrays) and a small
-    provenance block describing the reconstruction source and the
-    cross-check against run.log. The label is
-    'reconstructed_from_input_nml_not_raw_output': the curves are now
-    audited and visualization-ready, but they are still not the solver's
-    native E(t) / A(t) output.
+    Parameter names follow the solver namelist (&laser): wvl_nm,
+    intensity_Wcm2 (E0 = sqrt(I * Wcm2_to_au)), ncyc. Legacy keys
+    (lambda_nm, n_cycles, E0_au) remain accepted.
 
-    The cross-check converts the reconstructed omega from rad/fs to
-    atomic units before comparing against run_log['omega0_au'], and
-    compares nt against the pre-downsampling row count (nt_full) so a
-    downsampled t_axis does not produce a spurious mismatch.
+    The label is 'reconstructed_from_input_nml_not_raw_output': audited
+    and visualization-ready, but not the solver's native E(t)/A(t).
+    Note the solver additionally applies a residual-DC ramp correction
+    to A(t) (mod_laser.f90), which this reconstruction does not.
     """
     if time_fs.size == 0:
         return {"source": "unavailable"}
 
-    wavelength_nm = float(nml.get("lambda_nm", nml.get("wavelength_nm", 3200.0)))
-    n_cycles = float(nml.get("n_cycles", nml.get("ncyc", 4.0)))
-    e0 = float(nml.get("E0_au", nml.get("amp", 0.005)))
+    wavelength_nm = float(nml.get("wvl_nm", nml.get("lambda_nm", nml.get("wavelength_nm", 3200.0))))
+    n_cycles = float(nml.get("ncyc", nml.get("n_cycles", 4.0)))
+    if "intensity_Wcm2" in nml:
+        e0 = math.sqrt(float(nml["intensity_Wcm2"]) * WCM2_TO_AU)
+    else:
+        e0 = float(nml.get("E0_au", nml.get("amp", 0.005)))
 
     period_fs = wavelength_nm / C_NM_PER_FS
     omega_rad_per_fs = 2.0 * math.pi / period_fs
@@ -366,42 +536,41 @@ def reconstruct_field(time_fs: np.ndarray,
 
 
 # ----------------------------------------------------------------------
-# Bundle assembly
+# Bundle blocks
 # ----------------------------------------------------------------------
-
-def to_list(a: np.ndarray | None) -> list:
-    return [] if a is None else np.asarray(a).astype(float).tolist()
-
 
 def build_time_series(jt: np.ndarray | None,
                       jt_dec: np.ndarray | None,
                       jt_val: np.ndarray | None,
+                      jt_spin: np.ndarray | None,
                       n_max: int) -> tuple[dict, np.ndarray | None]:
-    if jt is None:
+    t, d = split_time_table(jt)
+    if t is None:
         return {}, None
-    jt_ds = downsample(jt, n_max)
+    keep = downsample(np.column_stack([t, d]), n_max)
+    t_ds = keep[:, 0]
     out: dict[str, list] = {
-        "time_fs": jt_ds[:, 0].tolist() if jt_ds.shape[1] >= 1 else [],
-        "Jx":      jt_ds[:, 1].tolist() if jt_ds.shape[1] >= 2 else [],
-        "Jy":      jt_ds[:, 2].tolist() if jt_ds.shape[1] >= 3 else [],
+        "time_fs": t_ds.tolist(),
+        "Jx":      keep[:, 1].tolist() if keep.shape[1] >= 2 else [],
+        "Jy":      keep[:, 2].tolist() if keep.shape[1] >= 3 else [],
     }
-    if jt_dec is not None and jt_dec.shape[1] >= 5:
-        d_ds = downsample(jt_dec, n_max)
-        out.update({
-            "Jx_intra": d_ds[:, 1].tolist(),
-            "Jy_intra": d_ds[:, 2].tolist(),
-            "Jx_inter": d_ds[:, 3].tolist(),
-            "Jy_inter": d_ds[:, 4].tolist(),
-        })
-    if jt_val is not None and jt_val.shape[1] >= 5:
-        v_ds = downsample(jt_val, n_max)
-        out.update({
-            "Jx_K":  v_ds[:, 1].tolist(),
-            "Jy_K":  v_ds[:, 2].tolist(),
-            "Jx_Kp": v_ds[:, 3].tolist(),
-            "Jy_Kp": v_ds[:, 4].tolist(),
-        })
-    return out, jt_ds[:, 0] if jt_ds.shape[1] >= 1 else None
+
+    def add(table: np.ndarray | None, names: list[str]) -> None:
+        tt, dd = split_time_table(table)
+        if tt is None:
+            return
+        dd_ds = downsample(dd, n_max)
+        for i, name in enumerate(names):
+            if i < dd_ds.shape[1]:
+                out[name] = dd_ds[:, i].tolist()
+
+    # Jt_decomposed.dat: Jx_intra Jy_intra Jx_inter Jy_inter Jx_tot Jy_tot
+    add(jt_dec, ["Jx_intra", "Jy_intra", "Jx_inter", "Jy_inter"])
+    # Jt_valley.dat: Jx_K Jy_K Jx_Kp Jy_Kp eta_x eta_y
+    add(jt_val, ["Jx_K", "Jy_K", "Jx_Kp", "Jy_Kp", "eta_x", "eta_y"])
+    # Jt_spin.dat: Jx_spin Jy_spin
+    add(jt_spin, ["Jx_spin", "Jy_spin"])
+    return out, t_ds
 
 
 def build_spectrum(hhg: np.ndarray | None, n_max: int) -> dict:
@@ -427,27 +596,88 @@ def build_spectrum(hhg: np.ndarray | None, n_max: int) -> dict:
 def build_band_path(band_file: np.ndarray | None) -> dict:
     if band_file is None or band_file.ndim != 2 or band_file.shape[1] < 2:
         return {}
-    k = band_file[:, 0]
-    e = band_file[:, 1:]
     return {
-        "k_path":    k.astype(float).tolist(),
-        "energy_eV": e.astype(float).tolist(),
+        "k_path":    band_file[:, 0].astype(float).tolist(),
+        "energy_eV": band_file[:, 1:].astype(float).tolist(),
     }
+
+
+def _grid_strides(nkx: int, nky: int, max_grid: int) -> tuple[int, int]:
+    return (max(1, math.ceil(nkx / max_grid)),
+            max(1, math.ceil(nky / max_grid)))
 
 
 def build_band_grid_preview(bg: BandGrid | None, bands: list[int], max_grid: int) -> dict:
     if bg is None or not bands:
         return {}
-    stride_x = max(1, math.ceil(bg.nkx / max_grid))
-    stride_y = max(1, math.ceil(bg.nky / max_grid))
-    kx_ds = bg.kx[::stride_x]
-    ky_ds = bg.ky[::stride_y]
-    energies = bg.energies[bands][:, ::stride_x, ::stride_y]
+    sx, sy = _grid_strides(bg.nkx, bg.nky, max_grid)
+    energies = bg.energies[bands][:, ::sx, ::sy]
+    out: dict[str, Any] = {
+        "selected_band_indices": [b + 1 for b in bands] if bg.layout == "long" else list(bands),
+        "band_index_base": 1 if bg.layout == "long" else 0,
+        "energies_eV": np.nan_to_num(energies).astype(float).tolist(),
+    }
+    if bg.layout == "long":
+        out["kx_grid"] = np.nan_to_num(bg.kx_grid[::sx, ::sy]).astype(float).tolist()
+        out["ky_grid"] = np.nan_to_num(bg.ky_grid[::sx, ::sy]).astype(float).tolist()
+    else:
+        out["kx"] = bg.kx[::sx].astype(float).tolist()
+        out["ky"] = bg.ky[::sy].astype(float).tolist()
+    return out
+
+
+def build_quantum_geometry_preview(qg: QuantumGeometry | None,
+                                   bands: list[int],
+                                   max_grid: int) -> dict:
+    if qg is None:
+        return {}
+    bands = [b for b in bands if 0 <= b < qg.n_bands] or list(range(min(4, qg.n_bands)))
+    sx, sy = _grid_strides(qg.nkx, qg.nky, max_grid)
     return {
-        "kx":                    kx_ds.astype(float).tolist(),
-        "ky":                    ky_ds.astype(float).tolist(),
-        "selected_band_indices": list(bands),
-        "energies_eV":           energies.astype(float).tolist(),
+        "selected_band_indices": [b + 1 for b in bands],
+        "band_index_base": 1,
+        "kx_grid": np.nan_to_num(qg.kx_grid[::sx, ::sy]).astype(float).tolist(),
+        "ky_grid": np.nan_to_num(qg.ky_grid[::sx, ::sy]).astype(float).tolist(),
+        "berry_curvature_au": np.nan_to_num(qg.berry[bands][:, ::sx, ::sy]).astype(float).tolist(),
+        "trace_quantum_metric_au": np.nan_to_num(qg.tr_metric[bands][:, ::sx, ::sy]).astype(float).tolist(),
+        "valley_id": qg.valley_id[::sx, ::sy].astype(int).tolist(),
+        "note": (
+            "PT-symmetric AFM: Omega_n(k) ~ 0 at the numerical floor is the "
+            "physically correct result, not a data error."
+        ),
+    }
+
+
+def build_occupation_preview(occ: OccupationSnapshots | None,
+                             max_snapshots: int,
+                             max_grid: int) -> dict:
+    if occ is None:
+        return {}
+    n_snap = occ.times_fs.size
+    snap_stride = max(1, math.ceil(n_snap / max_snapshots))
+    snap_ids = list(range(0, n_snap, snap_stride))
+    if (n_snap - 1) not in snap_ids:
+        snap_ids.append(n_snap - 1)
+    sx, sy = _grid_strides(occ.nkx, occ.nky, max_grid)
+    n_cond0 = occ.n_cond[0]
+    snapshots = []
+    for s in snap_ids:
+        snapshots.append({
+            "time_fs": float(occ.times_fs[s]),
+            "n_val":   np.nan_to_num(occ.n_val[s, ::sx, ::sy]).astype(float).tolist(),
+            "n_cond":  np.nan_to_num(occ.n_cond[s, ::sx, ::sy]).astype(float).tolist(),
+            "delta_n_cond": np.nan_to_num(
+                (occ.n_cond[s] - n_cond0)[::sx, ::sy]).astype(float).tolist(),
+        })
+    return {
+        "kx_grid": np.nan_to_num(occ.kx_grid[::sx, ::sy]).astype(float).tolist(),
+        "ky_grid": np.nan_to_num(occ.ky_grid[::sx, ::sy]).astype(float).tolist(),
+        "snapshots": snapshots,
+        "definition": (
+            "n_val = sum_n<=nv Re rho_nn(k,t); n_cond = sum_n>nv Re rho_nn(k,t); "
+            "delta_n_cond = n_cond(t) - n_cond(t0). Source: solver Tier-0 "
+            "occupation_kt.dat (save_occupation)."
+        ),
     }
 
 
@@ -458,8 +688,7 @@ def build_manifest(*,
                    model: str,
                    source_class: str,
                    confidence: str,
-                   bg: BandGrid | None,
-                   nt: int,
+                   dimensions: dict[str, int],
                    available: list[str],
                    missing: list[str],
                    source_paths: dict[str, str],
@@ -481,13 +710,11 @@ def build_manifest(*,
             "k": "1/bohr",
             "omega": "a.u.",
             "hhg": "|J(omega)|^2 solver scaling",
+            "berry_curvature": "a.u.",
+            "quantum_metric": "a.u.",
+            "occupation": "electrons per k-point (dimensionless)",
         },
-        "dimensions": {
-            "nt": int(nt),
-            "nkx": int(bg.nkx) if bg else 0,
-            "nky": int(bg.nky) if bg else 0,
-            "n_bands": int(bg.n_bands) if bg else 0,
-        },
+        "dimensions": dimensions,
         "available_modules": available,
         "missing_modules": missing,
         "files": {
@@ -510,22 +737,30 @@ def main(argv: list[str] | None = None) -> int:
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    jt    = _read_columns(run_dir / "Jt.dat")
-    hhg   = _read_columns(run_dir / "HHG.dat")
-    jt_d  = _read_columns(run_dir / "Jt_decomposed.dat")
-    jt_v  = _read_columns(run_dir / "Jt_valley.dat")
-    bands_arr = run_dir / "bands.dat"
-    bg = read_bands_grid(bands_arr) if bands_arr.exists() else None
+    jt      = _read_columns(run_dir / "Jt.dat")
+    hhg     = _read_columns(run_dir / "HHG.dat")
+    hhg_sp  = _read_columns(run_dir / "HHG_spin.dat")
+    jt_d    = _read_columns(run_dir / "Jt_decomposed.dat")
+    jt_v    = _read_columns(run_dir / "Jt_valley.dat")
+    jt_s    = _read_columns(run_dir / "Jt_spin.dat")
+    bg      = read_bands_grid(run_dir / "bands.dat") if (run_dir / "bands.dat").exists() else None
+    qg      = read_quantum_geometry(run_dir / "quantum_geometry.dat")
+    occ     = read_occupation_kt(run_dir / "occupation_kt.dat")
+    occ_band_file = run_dir / "occupation_band_kt.dat"
     band_path_arr = _read_columns(args.band_path) if args.band_path else None
-    nml = parse_input_nml(run_dir / "input.nml")
-    run_log = parse_run_log(run_dir / "run.log")
+    nml     = parse_input_nml(run_dir / "input.nml")
+    run_log = parse_run_log(run_dir)
 
-    selected = parse_band_slice(args.selected_bands, bg.n_bands if bg else 0)
+    one_based = bg is not None and bg.layout == "long"
+    selected = parse_band_slice(args.selected_bands, bg.n_bands if bg else (qg.n_bands if qg else 0), one_based)
 
-    time_series, t_axis = build_time_series(jt, jt_d, jt_v, args.max_points_current)
+    time_series, t_axis = build_time_series(jt, jt_d, jt_v, jt_s, args.max_points_current)
     spectrum = build_spectrum(hhg, args.max_points_spectrum)
+    spectrum_spin = build_spectrum(hhg_sp, args.max_points_spectrum)
     band_path = build_band_path(band_path_arr)
     band_grid_preview = build_band_grid_preview(bg, selected, args.max_grid)
+    geometry_preview = build_quantum_geometry_preview(qg, selected, args.max_grid)
+    occupation_preview = build_occupation_preview(occ, args.max_occ_snapshots, args.max_grid)
 
     raw_field = read_field_dat(run_dir / "Et.dat", run_dir / "At.dat")
     if raw_field is not None:
@@ -567,37 +802,37 @@ def main(argv: list[str] | None = None) -> int:
                        "Ax": [], "Ay": [], "source": "unavailable"}
 
     data_small = {
-        "time_series":       time_series,
-        "spectrum":          spectrum,
-        "band_path":         band_path,
-        "band_grid_preview": band_grid_preview,
-        "field":             field_block,
+        "time_series":              time_series,
+        "spectrum":                 spectrum,
+        **({"spectrum_spin":        spectrum_spin} if spectrum_spin else {}),
+        "band_path":                band_path,
+        "band_grid_preview":        band_grid_preview,
+        **({"quantum_geometry_preview": geometry_preview} if geometry_preview else {}),
+        **({"occupation_preview":   occupation_preview} if occupation_preview else {}),
+        "field":                    field_block,
     }
 
-    available = []
-    missing = [
-        "k_space_occupation",
-        "rho_k_t",
-        "production_lg_cov_berry_curvature",
-    ]
-    if time_series:
-        available.append("current_time_series")
-    if spectrum:
-        available.append("hhg_spectrum")
-    if band_path:
-        available.append("band_path")
-    if band_grid_preview:
-        available.append("band_grid")
-    if jt_d is not None:
-        available.append("current_decomposition")
-    if jt_v is not None:
-        available.append("valley_current")
-    if field_block["source"] != "unavailable":
-        available.append("field_time_series")
-    if field_block["source"] == "raw_solver_output":
-        available.append("solver_output_Et_At")
-    else:
-        missing.append("solver_output_Et_At")
+    available: list[str] = []
+    missing: list[str] = []
+
+    def module(name: str, present: bool) -> None:
+        (available if present else missing).append(name)
+
+    module("current_time_series", bool(time_series))
+    module("hhg_spectrum", bool(spectrum))
+    module("band_path", bool(band_path))
+    module("band_grid", bool(band_grid_preview))
+    module("current_decomposition", jt_d is not None)
+    module("valley_current", jt_v is not None)
+    module("spin_current", jt_s is not None)
+    module("hhg_spin", bool(spectrum_spin))
+    module("quantum_geometry", bool(geometry_preview))
+    module("k_space_occupation", bool(occupation_preview))
+    module("band_resolved_occupation", occ_band_file.exists())
+    module("field_time_series", field_block["source"] != "unavailable")
+    module("solver_output_Et_At", field_block["source"] == "raw_solver_output")
+    missing.append("interband_coherence_norm")
+    missing.append("rho_k_t_full_density_matrix")
 
     has_et = raw_field is not None and raw_field["et_present"]
     has_at = raw_field is not None and raw_field["at_present"]
@@ -605,15 +840,22 @@ def main(argv: list[str] | None = None) -> int:
         "run_dir": f"{RUN_DIR_PLACEHOLDER}",
         **({"Jt":        sanitize_run_path(run_dir, run_dir / "Jt.dat")}        if jt is not None else {}),
         **({"HHG":       sanitize_run_path(run_dir, run_dir / "HHG.dat")}       if hhg is not None else {}),
+        **({"HHG_spin":  sanitize_run_path(run_dir, run_dir / "HHG_spin.dat")}  if hhg_sp is not None else {}),
         **({"bands":     sanitize_run_path(run_dir, run_dir / "bands.dat")}     if bg is not None else {}),
         **({"Jt_decomposed": sanitize_run_path(run_dir, run_dir / "Jt_decomposed.dat")} if jt_d is not None else {}),
         **({"Jt_valley":     sanitize_run_path(run_dir, run_dir / "Jt_valley.dat")}     if jt_v is not None else {}),
+        **({"Jt_spin":       sanitize_run_path(run_dir, run_dir / "Jt_spin.dat")}       if jt_s is not None else {}),
+        **({"quantum_geometry": sanitize_run_path(run_dir, run_dir / "quantum_geometry.dat")} if qg is not None else {}),
+        **({"occupation_kt":    sanitize_run_path(run_dir, run_dir / "occupation_kt.dat")}    if occ is not None else {}),
+        **({"occupation_band_kt": sanitize_run_path(run_dir, occ_band_file)} if occ_band_file.exists() else {}),
         **({"input_nml": sanitize_run_path(run_dir, run_dir / "input.nml")}     if nml else {}),
         **({"run_log":   sanitize_run_path(run_dir, run_dir / "run.log")}       if run_log else {}),
         **({"Et":        sanitize_run_path(run_dir, run_dir / "Et.dat")}        if has_et else {}),
         **({"At":        sanitize_run_path(run_dir, run_dir / "At.dat")}        if has_at else {}),
         **({"band_path": sanitize_band_path(args.band_path)} if band_path_arr is not None else {}),
     }
+
+    gauge = args.gauge_method or str(nml.get("gauge_method", "unknown"))
 
     if field_block["source"] == "raw_solver_output":
         field_conf = "field is raw solver output"
@@ -625,15 +867,24 @@ def main(argv: list[str] | None = None) -> int:
         "research-output, visualization-ready for J(t)/HHG/bands; "
         f"{field_conf}"
     )
+
+    dimensions = {
+        "nt": int(jt.shape[0]) if jt is not None else 0,
+        "nkx": int(bg.nkx) if bg else (int(qg.nkx) if qg else 0),
+        "nky": int(bg.nky) if bg else (int(qg.nky) if qg else 0),
+        "n_bands": int(bg.n_bands) if bg else (int(qg.n_bands) if qg else 0),
+        **({"n_valence": int(nml["nv_orig"])} if "nv_orig" in nml else {}),
+        **({"n_occupation_snapshots": int(occ.times_fs.size)} if occ else {}),
+    }
+
     manifest = build_manifest(
         dataset_name=args.dataset_name or run_dir.name or "hhgxr_demo_run",
-        gauge=args.gauge_method,
+        gauge=gauge,
         material=args.material,
         model=args.model,
         source_class=args.source_class,
         confidence=args.confidence or default_conf,
-        bg=bg,
-        nt=jt.shape[0] if jt is not None else 0,
+        dimensions=dimensions,
         available=available,
         missing=missing,
         source_paths=source_paths,
@@ -651,9 +902,15 @@ def main(argv: list[str] | None = None) -> int:
             npz_path,
             **({"Jt": jt} if jt is not None else {}),
             **({"HHG": hhg} if hhg is not None else {}),
+            **({"HHG_spin": hhg_sp} if hhg_sp is not None else {}),
             **({"Jt_decomposed": jt_d} if jt_d is not None else {}),
             **({"Jt_valley": jt_v} if jt_v is not None else {}),
-            **({"kx": bg.kx, "ky": bg.ky, "energies_eV": bg.energies} if bg is not None else {}),
+            **({"Jt_spin": jt_s} if jt_s is not None else {}),
+            **({"energies_eV": bg.energies} if bg is not None else {}),
+            **({"berry": qg.berry, "tr_metric": qg.tr_metric,
+                "valley_id": qg.valley_id} if qg is not None else {}),
+            **({"occ_times_fs": occ.times_fs, "occ_n_val": occ.n_val,
+                "occ_n_cond": occ.n_cond} if occ is not None else {}),
             **({"Et_time_fs": raw_field["time_fs"],
                 "Ex": raw_field["Ex"], "Ey": raw_field["Ey"],
                 "Ax": raw_field["Ax"], "Ay": raw_field["Ay"]}

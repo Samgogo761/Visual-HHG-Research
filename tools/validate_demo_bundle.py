@@ -169,11 +169,57 @@ def check_field(field: dict[str, Any], issues: Issues) -> None:
             )
 
 
+def _shape2d(a: Any) -> tuple[int, int] | None:
+    if not isinstance(a, list) or not a or not isinstance(a[0], list):
+        return None
+    return len(a), len(a[0])
+
+
+def check_grid_block(name: str, block: dict[str, Any], issues: Issues) -> None:
+    """Common consistency for blocks carrying kx_grid/ky_grid 2D arrays."""
+    if not block:
+        return
+    ref = _shape2d(block.get("kx_grid"))
+    if ref is None:
+        return
+    if _shape2d(block.get("ky_grid")) != ref:
+        issues.err(f"{name}.ky_grid shape != kx_grid shape {ref}")
+    for key in ("energies_eV", "berry_curvature_au", "trace_quantum_metric_au"):
+        stack = block.get(key)
+        if isinstance(stack, list) and stack and isinstance(stack[0], list) \
+                and stack and isinstance(stack[0][0], list):
+            for bi, grid in enumerate(stack):
+                if _shape2d(grid) != ref:
+                    issues.err(f"{name}.{key}[{bi}] shape != kx_grid shape {ref}")
+    if isinstance(block.get("valley_id"), list) and _shape2d(block["valley_id"]) not in (None, ref):
+        issues.err(f"{name}.valley_id shape != kx_grid shape {ref}")
+
+
+def check_occupation(block: dict[str, Any], issues: Issues) -> None:
+    if not block:
+        return
+    ref = _shape2d(block.get("kx_grid"))
+    snaps = block.get("snapshots")
+    if not isinstance(snaps, list):
+        issues.err("occupation_preview.snapshots must be a list")
+        return
+    for i, s in enumerate(snaps):
+        if "time_fs" not in s:
+            issues.err(f"occupation_preview.snapshots[{i}] missing time_fs")
+        for key in ("n_val", "n_cond", "delta_n_cond"):
+            if ref is not None and _shape2d(s.get(key)) != ref:
+                issues.err(f"occupation_preview.snapshots[{i}].{key} shape != kx_grid shape {ref}")
+
+
 def check_data_small(ds: dict[str, Any], issues: Issues) -> None:
     check_time_series(ds.get("time_series") or {}, issues)
     check_spectrum(ds.get("spectrum") or {}, issues)
+    check_spectrum(ds.get("spectrum_spin") or {}, issues)
     check_band_path(ds.get("band_path") or {}, issues)
     check_field(ds.get("field") or {}, issues)
+    check_grid_block("band_grid_preview", ds.get("band_grid_preview") or {}, issues)
+    check_grid_block("quantum_geometry_preview", ds.get("quantum_geometry_preview") or {}, issues)
+    check_occupation(ds.get("occupation_preview") or {}, issues)
 
 
 def check_files_section(bundle: Path, manifest: dict[str, Any], issues: Issues) -> None:
