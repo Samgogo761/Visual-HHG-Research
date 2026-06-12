@@ -72,38 +72,56 @@ omega:       a.u.
 HHG:         |J(omega)|^2 with solver-specific scaling
 ```
 
-### 1.2b Newer verify_obs run (2026-06-10)
+### 1.2b verify_obs runs (2026-06)
 
-A second baseline now exists with the new observables enabled:
+Two solver baselines now exist:
 
 ```
-output_verify_obs_nb112_T2_0p5cycle/   (gauge_method = matrix_vg, nkx=nky=46, bands 1..112, nv=84)
-  bands.dat              (~11.7 MB, long format: ikx iky n E kx ky)
+output_verify_obs_nb112_T2_0p5cycle/   (matrix_vg, 46x46, T2_cycles=0.5)
+  bands.dat                 (long format: ikx iky n E kx ky)
   HHG.dat / HHG_spin.dat
   Jt.dat / Jt_decomposed.dat / Jt_valley.dat / Jt_spin.dat
-  quantum_geometry.dat   (~23.6 MB: ikx iky band kx ky E Omega gxx gyy gxy valley)
-  input.nml / run        (log file named `run`, no extension)
+  quantum_geometry.dat      (ikx iky band kx ky E Omega gxx gyy gxy valley)
+  input.nml / run           (log file named `run`)
+  occupation_kt.dat         missing (save_occupation = .false. in this run)
+  Et.dat / coherence_kt.dat missing (pre-Item 1/2)
+
+output_verify_obs_exports_20260611/    (lg_cov, 40x40, T2_cycles=1.0,
+                                        nt=5045, dt=0.008466 fs, total=42.703 fs)
+  all of the above, plus
+  occupation_kt.dat         52 snapshots, n_val(t=0)=84, n_cond(t=0)=0   (Item 0)
+  Et.dat                    raw solver field after residual-DC correction;
+                            max |E_native - E_reconstructed| ~ 5e-14 a.u. (Item 1)
+  coherence_kt.dat          52 snapshots, coherence_norm(k,t=0)=0         (Item 2)
+  occupation_band_kt.dat    intentionally skipped (full112 plain text is huge)
 ```
 
 All time-series files carry a leading `it` index column; the converter
 handles both this and the legacy time-first layout.
 
+The export verification ran with `T2_cycles = 1.0`. The final
+classical-light production baseline will use `T2_cycles = 0.5`.
+Bundles produced from the verification run remain Data-driven but the
+manifest confidence string and `dataset_name` must record the
+verification origin.
+
 ### 1.3 Missing data (current)
 
 ```
-E(t) / A(t) original solver output        -> small solver patch, see docs/SOLVER_EXPORT_REQUESTS.md Item 1
-interband coherence |rho_mn(k,t)|         -> small solver patch, Item 2
+band-resolved occupation rho_nn(k,t)      -> turn occ_band_resolved on selectively
+                                              (don't dump full112 as plain text)
 full complex density matrix rho_mn(k,t)   -> intentionally not exported (size)
 ```
 
-**Resolved since v0:** k-space occupation `rho_nn(k,t)` is NOT missing
-capability — the solver already implements Tier-0 snapshots
-(`occupation_kt.dat`, `occupation_band_kt.dat`) behind the
-`save_occupation` / `occ_band_resolved` flags in `&output`. The
-verify_obs run simply had `save_occupation = .false.`. Re-running with
-the flags on requires no code change (Item 0 in
-`docs/SOLVER_EXPORT_REQUESTS.md`). Quantum geometry (Berry curvature +
-metric + valley map) is likewise now produced by `save_geometry`.
+**Resolved since the previous PLAN revision:**
+
+- `k_space_occupation` — `occupation_kt.dat` produced (Item 0).
+- `solver_output_Et_At`  — `Et.dat` produced (Item 1); converter now
+  flips `field.source` to `raw_solver_output` automatically.
+- `interband_coherence_norm` — `coherence_kt.dat` produced (Item 2);
+  reader plumbed all the way to the `coherence_preview` block.
+- Quantum geometry (Berry + metric + valley) was already produced by
+  `save_geometry`.
 
 Field reconstruction history:
 
@@ -230,14 +248,18 @@ pushing.
 ## 7. Priority order
 
 ```
-1. CC finishes GitHub repo skeleton and convert_sbe_run.py
-2. The current fixed quicklook / sanitized manifest is the baseline
-3. data/samples/demo_bundle_minimal/ is regenerated from current scripts
-4. validate_demo_bundle.py: no private paths, no large blobs, no missing keys
-5. Desktop Unreal reads data_small.json and renders J(t) / HHG / band path
-6. Solver emits Et.dat / At.dat -> field label flips to raw_solver_output
-7. Design rho(k,t) snapshot export per docs/RHO_EXPORT_SPEC.md
-8. Only then: Niagara / XR / MCP
+1. CC finishes GitHub repo skeleton and convert_sbe_run.py            [done]
+2. Current fixed quicklook / sanitized manifest is the baseline       [done]
+3. data/samples/demo_bundle_minimal/ regenerated from current scripts [done]
+4. validate_demo_bundle.py: no private paths/large blobs/missing keys [done]
+5. Solver emits Et.dat -> field label flips to raw_solver_output      [done, Item 1]
+6. Solver emits occupation_kt.dat -> k_space_occupation available     [done, Item 0]
+7. Solver emits coherence_kt.dat -> interband_coherence_norm available [done, Item 2]
+8. Run convert_sbe_run.py over output_verify_obs_exports_20260611
+   and review the real Data-driven bundle quicklook                   [next]
+9. Final production rerun at T2_cycles=0.5                            [solver side]
+10. Desktop Unreal reads data_small.json and renders the four panels  [Phase 1]
+11. Only then: Niagara / XR / MCP                                     [Phase 2+]
 ```
 
 Underlying ordering principle:

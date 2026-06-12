@@ -28,12 +28,23 @@ occupation_band_kt.dat   # it time_fs ikx iky band occupation
 the `occupation_preview` block of `data_small.json`; the manifest then
 lists `k_space_occupation` under `available_modules`.
 
-What is **still missing** solver-side is only the interband coherence
-norm (see `SOLVER_EXPORT_REQUESTS.md`, Item 2):
+As of the verify_obs_exports_20260611 run the solver also produces
+the Item-2 coherence export:
 
 ```
 coherence_kt.dat         # it time_fs ikx iky kx ky coherence_norm
 ```
+
+with `coherence_norm(k, t=0) = 0` enforced. The HHG-XR Lab converter
+reads it directly and emits the `coherence_preview` block of
+`data_small.json`; the manifest then lists `interband_coherence_norm`
+under `available_modules`.
+
+What remains genuinely missing solver-side is only the band-windowed
+variant of `occupation_band_kt.dat` (skipped for full112 because a
+plain-text dump is ~1 GB). When/if it lands, the same JSON layout
+below applies; until then the `band_resolved_occupation` module stays
+listed under `missing_modules`.
 
 The `.npz`-based snapshot layout below remains the spec for the
 *converter-side packaging* of these text files, and for any future

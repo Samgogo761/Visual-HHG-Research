@@ -67,14 +67,13 @@ def test_converter_end_to_end(tmp_path: Path) -> None:
     for mod in ("current_time_series", "hhg_spectrum", "band_grid",
                 "current_decomposition", "valley_current",
                 "spin_current", "hhg_spin", "quantum_geometry",
-                "k_space_occupation"):
+                "k_space_occupation", "interband_coherence_norm"):
         assert mod in manifest["available_modules"], f"{mod} should be available"
-    for mod in ("interband_coherence_norm", "rho_k_t_full_density_matrix",
-                "solver_output_Et_At"):
+    for mod in ("rho_k_t_full_density_matrix", "solver_output_Et_At"):
         assert mod in manifest["missing_modules"], f"{mod} should be missing"
 
     # gauge label comes from input.nml &method when not overridden
-    assert manifest["physics_provenance"]["gauge_method"] == "matrix_vg"
+    assert manifest["physics_provenance"]["gauge_method"] == "lg_cov"
     assert manifest["dimensions"]["n_valence"] == 8
 
     src = manifest.get("source_paths") or {}
@@ -137,12 +136,37 @@ def test_occupation_preview(tmp_path: Path) -> None:
 def test_no_occupation_means_module_missing(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=8,
-                        with_occupation=False)
+                        with_occupation=False, with_coherence=False)
     out_dir = tmp_path / "bundle"
     assert _convert(run_dir, out_dir) == 0
     manifest = json.loads((out_dir / "manifest.json").read_text())
-    assert "k_space_occupation" in manifest["missing_modules"]
-    assert "k_space_occupation" not in manifest["available_modules"]
+    for mod in ("k_space_occupation", "interband_coherence_norm"):
+        assert mod in manifest["missing_modules"]
+        assert mod not in manifest["available_modules"]
+
+
+def test_coherence_preview(tmp_path: Path) -> None:
+    """coherence_kt.dat is the solver's Item-2 export. The reader must
+    propagate the t=0 invariant (coherence_norm == 0 everywhere) and
+    light up the interband_coherence_norm module."""
+    run_dir = tmp_path / "run"
+    write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=8, n_occ_snapshots=6)
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir) == 0
+
+    manifest = json.loads((out_dir / "manifest.json").read_text())
+    assert "interband_coherence_norm" in manifest["available_modules"]
+    assert manifest["dimensions"].get("n_coherence_snapshots", 0) > 0
+
+    ds = json.loads((out_dir / "data_small.json").read_text())
+    coh = ds["coherence_preview"]
+    assert 2 <= len(coh["snapshots"]) <= 5
+    first = coh["snapshots"][0]
+    assert np.allclose(np.asarray(first["coherence_norm"]), 0.0), \
+        "coherence_norm(k, t=0) must vanish (equilibrium has no interband coherence)"
+    later = coh["snapshots"][-1]
+    assert np.max(np.abs(np.asarray(later["coherence_norm"]))) > 0.0, \
+        "coherence_norm should pick up nonzero response during the pulse"
 
 
 def test_converter_promotes_to_raw_when_Et_dat_present(tmp_path: Path) -> None:

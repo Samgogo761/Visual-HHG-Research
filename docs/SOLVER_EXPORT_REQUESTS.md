@@ -11,6 +11,46 @@ Source-code references below are against the solver tree as of
 
 ---
 
+## Status as of 2026-06-11 (verify_obs_exports_20260611 run)
+
+**All three items have been completed on the solver side and accepted
+by the HHG-XR Lab converter.** Run parameters:
+
+```
+output_verify_obs_exports_20260611
+  gauge_method = lg_cov, full112, nkx = nky = 40, T2_cycles = 1.0
+  nt = 5045, dt = 0.008466 fs, total = 42.703 fs
+```
+
+Caveat: this is an *export-interface verification* run, not the final
+production benchmark. The final classical-light production baseline
+will use `T2_cycles = 0.5`. Until that production rerun lands the
+manifest still records the verification run in its `dataset_name` and
+the confidence string.
+
+| Item | File | Format | Acceptance |
+|------|------|--------|------------|
+| 0    | `occupation_kt.dat` (~7.65 MB) | `it time_fs ikx iky kx ky n_val n_cond` | 52 snapshots, 40x40 grid; `n_val(t=0)=84`, `n_cond(t=0)=0` for every k |
+| 1    | `Et.dat` (~0.50 MB)            | `it time_fs Ex Ey Ax Ay`                 | `Ax(t0)=Ax(tN)=0` (residual-DC correction applied); native vs reconstructed `max |dE| ~ 5e-14 a.u.`; HHG-XR Lab converter promotes `field.source` to `raw_solver_output` |
+| 2    | `coherence_kt.dat` (~6.32 MB)  | `it time_fs ikx iky kx ky coherence_norm` | `coherence_norm(k, t=0) = 0` for every k; nonzero response inside the pulse |
+
+Solver log notes (`run.log`):
+
+```
+Initial current |J(t=0)| = 4.3971e-18    (machine zero, equilibrium current floor)
+```
+
+Intentionally not produced by this run:
+
+```
+occupation_band_kt.dat   # too large for full112 as plain text; defer to a
+                         # windowed or NPZ variant if/when needed.
+```
+
+Below is the original work plan, kept for reference.
+
+---
+
 ## Item 0 — Enable the occupation export that already exists (no code change)
 
 **Status: already implemented in the solver. Just flip the flags.**

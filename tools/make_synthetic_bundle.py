@@ -36,6 +36,7 @@ def write_synthetic_run(run_dir: Path,
                         with_spin: bool = True,
                         with_geometry: bool = True,
                         with_occupation: bool = True,
+                        with_coherence: bool = True,
                         n_occ_snapshots: int = 6) -> None:
     """Write a synthetic run directory in the solver's real column formats."""
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -126,9 +127,9 @@ def write_synthetic_run(run_dir: Path,
                    header="Band-resolved quantum geometry (length gauge, band basis)\n"
                           "ikx iky band  kx(1/bohr) ky(1/bohr)  E(eV)  Omega(a.u.)  gxx  gyy  gxy  valley")
 
+    snap_its = np.linspace(1, nt, n_occ_snapshots, dtype=int) if (with_occupation or with_coherence) else np.array([], dtype=int)
     if with_occupation:
         # occupation_kt.dat: it time_fs ikx iky kx ky n_val n_cond
-        snap_its = np.linspace(1, nt, n_occ_snapshots, dtype=int)
         rows = []
         for s_it in snap_its:
             time_fs = t[s_it - 1]
@@ -146,6 +147,29 @@ def write_synthetic_run(run_dir: Path,
                    header="k-resolved occupation, valence/conduction sums\n"
                           "it  time_fs  ikx iky  kx ky  n_val n_cond")
 
+    if with_coherence:
+        # coherence_kt.dat: it time_fs ikx iky kx ky coherence_norm
+        # By construction: coherence_norm(k, t=0) == 0 (equilibrium).
+        rows = []
+        t0_value = float(t[snap_its[0] - 1]) if snap_its.size else None
+        for s_it in snap_its:
+            time_fs = float(t[s_it - 1])
+            pump = float(env[s_it - 1])
+            for iy in range(1, nky + 1):
+                for ix in range(1, nkx + 1):
+                    kx_c = kxv[ix - 1] - 0.15 * kyv[iy - 1]
+                    ky_c = kyv[iy - 1]
+                    if t0_value is not None and time_fs == t0_value:
+                        coh = 0.0
+                    else:
+                        coh = 0.01 * pump * np.exp(-4 * (kx_c**2 + ky_c**2))
+                    rows.append([s_it, time_fs, ix, iy, kx_c, ky_c, coh])
+        np.savetxt(run_dir / "coherence_kt.dat", np.array(rows),
+                   fmt=["%7d", "%14.6E", "%5d", "%5d", "%14.6E", "%14.6E", "%16.8E"],
+                   header="k-resolved interband coherence norm\n"
+                          "coherence_norm(k,t) = sqrt(sum_{m!=n} |rho_mn(k,t)|^2)\n"
+                          "it  time_fs  ikx iky  kx ky  coherence_norm")
+
     # input.nml in the solver's namelist vocabulary
     (run_dir / "input.nml").write_text(
         "&laser\n"
@@ -158,11 +182,12 @@ def write_synthetic_run(run_dir: Path,
         "  nv_orig = 8\n"
         "/\n"
         "&method\n"
-        "  gauge_method = 'matrix_vg'\n"
+        "  gauge_method = 'lg_cov'\n"
         "/\n"
         "&output\n"
         "  save_geometry = .true.\n"
         f"  save_occupation = .{str(with_occupation).lower()}.\n"
+        f"  save_coherence  = .{str(with_coherence).lower()}.\n"
         "/\n"
     )
     # log file named `run` (no extension), like the production runs

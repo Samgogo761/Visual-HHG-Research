@@ -105,9 +105,9 @@ hhg_spin                       # HHG_spin.dat present
 quantum_geometry               # quantum_geometry.dat present (Omega + metric + valley)
 k_space_occupation             # occupation_kt.dat present (Tier-0 snapshots)
 band_resolved_occupation       # occupation_band_kt.dat present
+interband_coherence_norm       # coherence_kt.dat present (Item 2 export)
 field_time_series
 solver_output_Et_At            # native Et.dat/At.dat present
-interband_coherence_norm       # pending solver export (SOLVER_EXPORT_REQUESTS.md)
 rho_k_t_full_density_matrix    # intentionally not exported (size)
 ```
 
@@ -299,6 +299,34 @@ offset cancels and the laser-driven transfer becomes visually obvious.
 Snapshot count in JSON is capped by `--max-occ-snapshots` (default 8);
 the full snapshot set stays in the optional `.npz` or in the local
 `occupation_kt.dat`.
+
+### 2.5d `coherence_preview`
+
+Downsampled snapshots from `coherence_kt.dat`
+(`save_coherence` in `&output`, Item 2 export):
+
+```json
+"coherence_preview": {
+  "kx_grid": [[...], ...],
+  "ky_grid": [[...], ...],
+  "snapshots": [
+    {
+      "time_fs":        0.0,
+      "coherence_norm": [[...], ...]   // sqrt(sum_{m!=n} |rho_mn(k,t)|^2)
+    }
+  ],
+  "definition": "...; coherence_norm(k, t=0) == 0."
+}
+```
+
+The equilibrium invariant `coherence_norm(k, t=0) == 0` is enforced by
+the solver and reproduced in the committed sample bundle. Downstream
+clients can rely on it: any non-zero value at the first snapshot is a
+data bug, not physics.
+
+Snapshot count in JSON is capped by `--max-occ-snapshots` (the same
+flag governs both occupation and coherence; the full set stays in the
+optional `.npz` or in the local `coherence_kt.dat`).
 
 ### 2.6 `field`
 

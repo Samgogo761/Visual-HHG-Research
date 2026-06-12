@@ -195,20 +195,21 @@ def check_grid_block(name: str, block: dict[str, Any], issues: Issues) -> None:
         issues.err(f"{name}.valley_id shape != kx_grid shape {ref}")
 
 
-def check_occupation(block: dict[str, Any], issues: Issues) -> None:
+def check_k_snapshots(name: str, block: dict[str, Any],
+                      value_keys: tuple[str, ...], issues: Issues) -> None:
     if not block:
         return
     ref = _shape2d(block.get("kx_grid"))
     snaps = block.get("snapshots")
     if not isinstance(snaps, list):
-        issues.err("occupation_preview.snapshots must be a list")
+        issues.err(f"{name}.snapshots must be a list")
         return
     for i, s in enumerate(snaps):
         if "time_fs" not in s:
-            issues.err(f"occupation_preview.snapshots[{i}] missing time_fs")
-        for key in ("n_val", "n_cond", "delta_n_cond"):
+            issues.err(f"{name}.snapshots[{i}] missing time_fs")
+        for key in value_keys:
             if ref is not None and _shape2d(s.get(key)) != ref:
-                issues.err(f"occupation_preview.snapshots[{i}].{key} shape != kx_grid shape {ref}")
+                issues.err(f"{name}.snapshots[{i}].{key} shape != kx_grid shape {ref}")
 
 
 def check_data_small(ds: dict[str, Any], issues: Issues) -> None:
@@ -219,7 +220,10 @@ def check_data_small(ds: dict[str, Any], issues: Issues) -> None:
     check_field(ds.get("field") or {}, issues)
     check_grid_block("band_grid_preview", ds.get("band_grid_preview") or {}, issues)
     check_grid_block("quantum_geometry_preview", ds.get("quantum_geometry_preview") or {}, issues)
-    check_occupation(ds.get("occupation_preview") or {}, issues)
+    check_k_snapshots("occupation_preview", ds.get("occupation_preview") or {},
+                      ("n_val", "n_cond", "delta_n_cond"), issues)
+    check_k_snapshots("coherence_preview", ds.get("coherence_preview") or {},
+                      ("coherence_norm",), issues)
 
 
 def check_files_section(bundle: Path, manifest: dict[str, Any], issues: Issues) -> None:

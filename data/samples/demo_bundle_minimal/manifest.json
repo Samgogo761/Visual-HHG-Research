@@ -5,7 +5,7 @@
     "source_class": "Model-based",
     "material": "bilayer CrI3 AFM",
     "model": "Wannier-SBE",
-    "gauge_method": "matrix_vg",
+    "gauge_method": "lg_cov",
     "confidence": "synthetic demo bundle; curves are illustrative only, do not use as physical references"
   },
   "units": {
@@ -25,7 +25,8 @@
     "nky": 8,
     "n_bands": 12,
     "n_valence": 8,
-    "n_occupation_snapshots": 6
+    "n_occupation_snapshots": 6,
+    "n_coherence_snapshots": 6
   },
   "available_modules": [
     "current_time_series",
@@ -38,12 +39,12 @@
     "hhg_spin",
     "quantum_geometry",
     "k_space_occupation",
+    "interband_coherence_norm",
     "field_time_series"
   ],
   "missing_modules": [
     "band_resolved_occupation",
     "solver_output_Et_At",
-    "interband_coherence_norm",
     "rho_k_t_full_density_matrix"
   ],
   "files": {
@@ -61,6 +62,7 @@
     "Jt_spin": "<LOCAL_SBE_RUN_DIR>/Jt_spin.dat",
     "quantum_geometry": "<LOCAL_SBE_RUN_DIR>/quantum_geometry.dat",
     "occupation_kt": "<LOCAL_SBE_RUN_DIR>/occupation_kt.dat",
+    "coherence_kt": "<LOCAL_SBE_RUN_DIR>/coherence_kt.dat",
     "input_nml": "<LOCAL_SBE_RUN_DIR>/input.nml",
     "run_log": "<LOCAL_SBE_RUN_DIR>/run.log",
     "band_path": "<LOCAL_WANNIER_DIR>/CrI3_band.dat"

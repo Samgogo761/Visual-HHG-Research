@@ -61,30 +61,36 @@ Examples in v0:
 
 ## 2. Demo provenance map
 
-With the verify_obs-generation solver outputs
-(`output_verify_obs_nb112_T2_0p5cycle` and successors), a real run
-supports **`Data-driven`** visualization of:
+With the verify_obs_exports_20260611 run (lg_cov, 40x40, full112,
+T2_cycles=1.0) the solver supports **`Data-driven`** visualization of:
 
 ```
-J(t)
-HHG spectrum (charge and spin-z)
-band energies (k-grid and k-path)
-intraband/interband current decomposition
-valley-resolved current and valley polarization eta
-spin-z current J^{s_z}(t)
-quantum geometry: Berry curvature, quantum metric trace, valley map
-k-space occupation n_val/n_cond(k,t)      [requires save_occupation=.true. in the run]
-band-resolved occupation rho_nn(k,t)      [requires occ_band_resolved=.true.]
+J(t)                                       (Jt.dat)
+HHG spectrum (charge and spin-z)           (HHG.dat, HHG_spin.dat)
+band energies (k-grid and k-path)          (bands.dat + CrI3_band.dat)
+intraband/interband current decomposition  (Jt_decomposed.dat)
+valley-resolved current and eta            (Jt_valley.dat)
+spin-z current J^{s_z}(t)                  (Jt_spin.dat)
+quantum geometry: Omega, Tr g, valley map  (quantum_geometry.dat)
+k-space occupation n_val/n_cond(k,t)       (occupation_kt.dat, Item 0)
+native E(t)/A(t)                           (Et.dat, Item 1; raw_solver_output)
+interband coherence norm                   (coherence_kt.dat, Item 2)
 ```
 
-It does **not** yet support `Data-driven` visualization of:
+Pending solver work for higher tiers (NOT blocking v0/v1):
 
 ```
-native E(t)/A(t)                  (solver patch pending, SOLVER_EXPORT_REQUESTS.md Item 1)
-interband coherence |rho_mn(k,t)| (solver patch pending, Item 2)
-full density matrix dynamics      (intentionally not exported)
-quantum-light statistics          (BSV module exists solver-side; out of v0 scope)
+band-resolved occupation rho_nn(k,t)   (occupation_band_kt.dat; turn occ_band_resolved
+                                        on selectively to avoid 1+ GB text files for full112)
+full density matrix dynamics           (intentionally not exported)
+quantum-light statistics               (BSV module exists solver-side; out of v0 scope)
 ```
+
+The export verification used `T2_cycles = 1.0`; the final classical-light
+production baseline is `T2_cycles = 0.5`. Bundles produced from the
+verification run remain `Data-driven` — they are real solver output —
+but the manifest confidence string and dataset name must record that
+the run is an export verification, not the production benchmark.
 
 These quantities are listed under `missing_modules` in the manifest and
 must not be silently faked. If a prototype needs a placeholder rho(k,t),

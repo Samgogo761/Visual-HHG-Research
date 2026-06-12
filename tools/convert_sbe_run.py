@@ -16,7 +16,8 @@ mod_sbe.f90):
     quantum_geometry.dat   # ikx iky band kx ky E(eV) Omega gxx gyy gxy valley
     occupation_kt.dat      # it time_fs ikx iky kx ky n_val n_cond      (save_occupation)
     occupation_band_kt.dat # it time_fs ikx iky band occupation         (occ_band_resolved)
-    Et.dat / At.dat        # it time(fs) Ex Ey Ax Ay   (future native export)
+    coherence_kt.dat       # it time_fs ikx iky kx ky coherence_norm    (save_coherence)
+    Et.dat / At.dat        # it time(fs) Ex Ey Ax Ay   (native field export)
     input.nml              # &laser wvl_nm intensity_Wcm2 ncyc ... ; &method gauge_method
     run.log or run         # stdout log (omega0 / T_total / nt scraped when present)
 
@@ -378,20 +379,25 @@ def read_quantum_geometry(path: Path) -> QuantumGeometry | None:
 # ----------------------------------------------------------------------
 
 @dataclass
-class OccupationSnapshots:
+class KSnapshots:
+    """k-resolved snapshot stack shared by occupation and coherence outputs.
+
+    The solver writes one row per (it, ikx, iky) per file:
+        occupation_kt.dat:  it time_fs ikx iky kx ky n_val n_cond
+        coherence_kt.dat:   it time_fs ikx iky kx ky coherence_norm
+    """
     times_fs: np.ndarray            # (n_snap,)
     nkx: int
     nky: int
     kx_grid: np.ndarray             # (nkx, nky)
     ky_grid: np.ndarray
-    n_val: np.ndarray               # (n_snap, nkx, nky)
-    n_cond: np.ndarray              # (n_snap, nkx, nky)
+    values: dict[str, np.ndarray]   # name -> (n_snap, nkx, nky)
 
 
-def read_occupation_kt(path: Path) -> OccupationSnapshots | None:
-    """Read occupation_kt.dat:  it time_fs ikx iky kx ky n_val n_cond."""
+def _read_k_snapshots(path: Path, value_columns: dict[str, int],
+                      min_cols: int) -> KSnapshots | None:
     raw = _read_columns(path)
-    if raw is None or raw.ndim != 2 or raw.shape[1] < 8:
+    if raw is None or raw.ndim != 2 or raw.shape[1] < min_cols:
         return None
     it = raw[:, 0].astype(int)
     snap_ids = np.unique(it)
@@ -402,8 +408,8 @@ def read_occupation_kt(path: Path) -> OccupationSnapshots | None:
     times = np.zeros(n_snap)
     kx_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
     ky_grid = np.full((nkx, nky), np.nan, dtype=np.float32)
-    n_val = np.full((n_snap, nkx, nky), np.nan, dtype=np.float32)
-    n_cond = np.full((n_snap, nkx, nky), np.nan, dtype=np.float32)
+    values = {name: np.full((n_snap, nkx, nky), np.nan, dtype=np.float32)
+              for name in value_columns}
     id_to_pos = {s: i for i, s in enumerate(snap_ids)}
     for r in range(raw.shape[0]):
         s = id_to_pos[it[r]]
@@ -411,11 +417,25 @@ def read_occupation_kt(path: Path) -> OccupationSnapshots | None:
         times[s] = raw[r, 1]
         kx_grid[ix, iy] = raw[r, 4]
         ky_grid[ix, iy] = raw[r, 5]
-        n_val[s, ix, iy] = raw[r, 6]
-        n_cond[s, ix, iy] = raw[r, 7]
-    return OccupationSnapshots(times_fs=times, nkx=nkx, nky=nky,
-                               kx_grid=kx_grid, ky_grid=ky_grid,
-                               n_val=n_val, n_cond=n_cond)
+        for name, col in value_columns.items():
+            values[name][s, ix, iy] = raw[r, col]
+    return KSnapshots(times_fs=times, nkx=nkx, nky=nky,
+                      kx_grid=kx_grid, ky_grid=ky_grid, values=values)
+
+
+def read_occupation_kt(path: Path) -> KSnapshots | None:
+    """Read occupation_kt.dat: it time_fs ikx iky kx ky n_val n_cond."""
+    return _read_k_snapshots(path, {"n_val": 6, "n_cond": 7}, min_cols=8)
+
+
+def read_coherence_kt(path: Path) -> KSnapshots | None:
+    """Read coherence_kt.dat: it time_fs ikx iky kx ky coherence_norm.
+
+    coherence_norm(k,t) = sqrt(sum_{m!=n} |rho_mn(k,t)|^2). The solver
+    fixes coherence_norm(k, t=0) == 0; rendering n>0 entries at t>0 is
+    safe.
+    """
+    return _read_k_snapshots(path, {"coherence_norm": 6}, min_cols=7)
 
 
 # ----------------------------------------------------------------------
@@ -648,26 +668,34 @@ def build_quantum_geometry_preview(qg: QuantumGeometry | None,
     }
 
 
-def build_occupation_preview(occ: OccupationSnapshots | None,
+def _select_snapshot_indices(n_snap: int, max_snapshots: int) -> list[int]:
+    if n_snap <= 0:
+        return []
+    stride = max(1, math.ceil(n_snap / max_snapshots))
+    snap_ids = list(range(0, n_snap, stride))
+    if (n_snap - 1) not in snap_ids:
+        snap_ids.append(n_snap - 1)
+    return snap_ids
+
+
+def build_occupation_preview(occ: KSnapshots | None,
                              max_snapshots: int,
                              max_grid: int) -> dict:
     if occ is None:
         return {}
-    n_snap = occ.times_fs.size
-    snap_stride = max(1, math.ceil(n_snap / max_snapshots))
-    snap_ids = list(range(0, n_snap, snap_stride))
-    if (n_snap - 1) not in snap_ids:
-        snap_ids.append(n_snap - 1)
+    snap_ids = _select_snapshot_indices(occ.times_fs.size, max_snapshots)
     sx, sy = _grid_strides(occ.nkx, occ.nky, max_grid)
-    n_cond0 = occ.n_cond[0]
+    n_val = occ.values["n_val"]
+    n_cond = occ.values["n_cond"]
+    n_cond0 = n_cond[0]
     snapshots = []
     for s in snap_ids:
         snapshots.append({
             "time_fs": float(occ.times_fs[s]),
-            "n_val":   np.nan_to_num(occ.n_val[s, ::sx, ::sy]).astype(float).tolist(),
-            "n_cond":  np.nan_to_num(occ.n_cond[s, ::sx, ::sy]).astype(float).tolist(),
+            "n_val":   np.nan_to_num(n_val[s, ::sx, ::sy]).astype(float).tolist(),
+            "n_cond":  np.nan_to_num(n_cond[s, ::sx, ::sy]).astype(float).tolist(),
             "delta_n_cond": np.nan_to_num(
-                (occ.n_cond[s] - n_cond0)[::sx, ::sy]).astype(float).tolist(),
+                (n_cond[s] - n_cond0)[::sx, ::sy]).astype(float).tolist(),
         })
     return {
         "kx_grid": np.nan_to_num(occ.kx_grid[::sx, ::sy]).astype(float).tolist(),
@@ -677,6 +705,32 @@ def build_occupation_preview(occ: OccupationSnapshots | None,
             "n_val = sum_n<=nv Re rho_nn(k,t); n_cond = sum_n>nv Re rho_nn(k,t); "
             "delta_n_cond = n_cond(t) - n_cond(t0). Source: solver Tier-0 "
             "occupation_kt.dat (save_occupation)."
+        ),
+    }
+
+
+def build_coherence_preview(coh: KSnapshots | None,
+                            max_snapshots: int,
+                            max_grid: int) -> dict:
+    if coh is None:
+        return {}
+    snap_ids = _select_snapshot_indices(coh.times_fs.size, max_snapshots)
+    sx, sy = _grid_strides(coh.nkx, coh.nky, max_grid)
+    cn = coh.values["coherence_norm"]
+    snapshots = []
+    for s in snap_ids:
+        snapshots.append({
+            "time_fs":        float(coh.times_fs[s]),
+            "coherence_norm": np.nan_to_num(cn[s, ::sx, ::sy]).astype(float).tolist(),
+        })
+    return {
+        "kx_grid": np.nan_to_num(coh.kx_grid[::sx, ::sy]).astype(float).tolist(),
+        "ky_grid": np.nan_to_num(coh.ky_grid[::sx, ::sy]).astype(float).tolist(),
+        "snapshots": snapshots,
+        "definition": (
+            "coherence_norm(k,t) = sqrt(sum_{m != n} |rho_mn(k,t)|^2). "
+            "Equilibrium check: coherence_norm(k, t=0) == 0. "
+            "Source: solver coherence_kt.dat (save_coherence)."
         ),
     }
 
@@ -746,6 +800,7 @@ def main(argv: list[str] | None = None) -> int:
     bg      = read_bands_grid(run_dir / "bands.dat") if (run_dir / "bands.dat").exists() else None
     qg      = read_quantum_geometry(run_dir / "quantum_geometry.dat")
     occ     = read_occupation_kt(run_dir / "occupation_kt.dat")
+    coh     = read_coherence_kt(run_dir / "coherence_kt.dat")
     occ_band_file = run_dir / "occupation_band_kt.dat"
     band_path_arr = _read_columns(args.band_path) if args.band_path else None
     nml     = parse_input_nml(run_dir / "input.nml")
@@ -761,6 +816,7 @@ def main(argv: list[str] | None = None) -> int:
     band_grid_preview = build_band_grid_preview(bg, selected, args.max_grid)
     geometry_preview = build_quantum_geometry_preview(qg, selected, args.max_grid)
     occupation_preview = build_occupation_preview(occ, args.max_occ_snapshots, args.max_grid)
+    coherence_preview = build_coherence_preview(coh, args.max_occ_snapshots, args.max_grid)
 
     raw_field = read_field_dat(run_dir / "Et.dat", run_dir / "At.dat")
     if raw_field is not None:
@@ -809,6 +865,7 @@ def main(argv: list[str] | None = None) -> int:
         "band_grid_preview":        band_grid_preview,
         **({"quantum_geometry_preview": geometry_preview} if geometry_preview else {}),
         **({"occupation_preview":   occupation_preview} if occupation_preview else {}),
+        **({"coherence_preview":    coherence_preview} if coherence_preview else {}),
         "field":                    field_block,
     }
 
@@ -829,9 +886,9 @@ def main(argv: list[str] | None = None) -> int:
     module("quantum_geometry", bool(geometry_preview))
     module("k_space_occupation", bool(occupation_preview))
     module("band_resolved_occupation", occ_band_file.exists())
+    module("interband_coherence_norm", bool(coherence_preview))
     module("field_time_series", field_block["source"] != "unavailable")
     module("solver_output_Et_At", field_block["source"] == "raw_solver_output")
-    missing.append("interband_coherence_norm")
     missing.append("rho_k_t_full_density_matrix")
 
     has_et = raw_field is not None and raw_field["et_present"]
@@ -848,6 +905,7 @@ def main(argv: list[str] | None = None) -> int:
         **({"quantum_geometry": sanitize_run_path(run_dir, run_dir / "quantum_geometry.dat")} if qg is not None else {}),
         **({"occupation_kt":    sanitize_run_path(run_dir, run_dir / "occupation_kt.dat")}    if occ is not None else {}),
         **({"occupation_band_kt": sanitize_run_path(run_dir, occ_band_file)} if occ_band_file.exists() else {}),
+        **({"coherence_kt":     sanitize_run_path(run_dir, run_dir / "coherence_kt.dat")}     if coh is not None else {}),
         **({"input_nml": sanitize_run_path(run_dir, run_dir / "input.nml")}     if nml else {}),
         **({"run_log":   sanitize_run_path(run_dir, run_dir / "run.log")}       if run_log else {}),
         **({"Et":        sanitize_run_path(run_dir, run_dir / "Et.dat")}        if has_et else {}),
@@ -875,6 +933,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_bands": int(bg.n_bands) if bg else (int(qg.n_bands) if qg else 0),
         **({"n_valence": int(nml["nv_orig"])} if "nv_orig" in nml else {}),
         **({"n_occupation_snapshots": int(occ.times_fs.size)} if occ else {}),
+        **({"n_coherence_snapshots":  int(coh.times_fs.size)} if coh else {}),
     }
 
     manifest = build_manifest(
@@ -909,8 +968,11 @@ def main(argv: list[str] | None = None) -> int:
             **({"energies_eV": bg.energies} if bg is not None else {}),
             **({"berry": qg.berry, "tr_metric": qg.tr_metric,
                 "valley_id": qg.valley_id} if qg is not None else {}),
-            **({"occ_times_fs": occ.times_fs, "occ_n_val": occ.n_val,
-                "occ_n_cond": occ.n_cond} if occ is not None else {}),
+            **({"occ_times_fs": occ.times_fs,
+                "occ_n_val": occ.values["n_val"],
+                "occ_n_cond": occ.values["n_cond"]} if occ is not None else {}),
+            **({"coh_times_fs": coh.times_fs,
+                "coh_norm": coh.values["coherence_norm"]} if coh is not None else {}),
             **({"Et_time_fs": raw_field["time_fs"],
                 "Ex": raw_field["Ex"], "Ey": raw_field["Ey"],
                 "Ax": raw_field["Ax"], "Ay": raw_field["Ay"]}
