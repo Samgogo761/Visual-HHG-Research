@@ -1,0 +1,38 @@
+# Example configuration for tools/convert_sbe_run.py
+#
+# This is a *sample* config. It uses path placeholders only -- no private
+# absolute paths. Copy this file to e.g.
+#   configs/demo_lgcov_k40_nb104.local.yaml
+# and fill in real paths for local use. The .local.* suffix is ignored by
+# git (.gitignore).
+
+dataset_name: "lg_cov_k40_nb104_T2_0p5cycle_plusN"
+
+# Input run directory containing Jt.dat, HHG.dat, bands.dat,
+# Jt_decomposed.dat, Jt_valley.dat, input.nml, run.log.
+run_dir: "<LOCAL_SBE_RUN_DIR>/lgcov_k40_nb104"
+
+# Optional Wannier band-path file used for the band_path panel.
+band_path: "<LOCAL_WANNIER_DIR>/CrI3_band.dat"
+
+# Where the demo bundle is written.
+out_dir: "data/samples/demo_bundle_minimal"
+
+# Downsampling for JSON.
+max_points_current: 1200
+max_points_spectrum: 800
+
+# Band slice for band_grid_preview (HOMO-ish region for n_bands=104).
+selected_bands: "80:90"
+
+# Max kx, ky grid points kept in band_grid_preview.
+max_grid: 40
+
+# Provenance overrides.
+material: "bilayer CrI3 AFM"
+model: "Wannier-SBE"
+gauge_method: "lg_cov"
+
+# Whether to emit the optional full-resolution data_arrays.npz.
+# Keep false for the publicly committed sample.
+emit_npz: false

@@ -1,0 +1,60 @@
+# demo_bundle_minimal/
+
+A small, **synthetic** demo bundle that exists so the schema, the
+validator, and any downstream client (Unreal, plot script) can be
+exercised without access to the real Wannier-SBE outputs.
+
+> Provenance: synthetic. `physics_provenance.source_class = "Model-based"`.
+> Do **not** use the curves in this bundle as physical references for
+> CrI3 HHG.
+
+## Files
+
+```
+manifest.json            schema + provenance + dimensions + module lists
+data_small.json          downsampled JSON arrays (J(t), HHG, bands, E(t)+A(t))
+quicklook_summary.png    4-panel preview, E/A overlay
+```
+
+The `field` block carries Ex/Ey **and** Ax/Ay. In this synthetic
+bundle the field is reconstructed (label
+`reconstructed_from_input_nml_not_raw_output`) so that downstream
+clients can exercise the cross-check provenance keys
+(`reconstructed_from`, `cross_checked_with`, `cross_check`) without
+needing a real solver `Et.dat`. The HHG-XR Lab converter automatically
+flips the label to `raw_solver_output` when the run directory contains
+a real `Et.dat` / `At.dat`.
+
+## How it was generated
+
+```bash
+python tools/make_synthetic_bundle.py
+```
+
+The generator writes a synthetic run directory in the **real
+Quantum-light solver formats** (leading `it` index column on time
+series, long-format `bands.dat` with header, `Jt_spin` / `HHG_spin` /
+`quantum_geometry` / `occupation_kt` files, log named `run`) with
+`nt=600`, `nkx=8`, `nky=8`, `n_bands=12`, then runs the converter over
+it. Regenerate whenever the schema changes; tests import the same
+writers, so the committed bundle and the test fixtures cannot drift
+apart.
+
+## What this bundle is *not*
+
+This bundle does **not** represent the real
+`lg_cov_k40_nb104_T2_0p5cycle_plusN` run. That run is produced locally
+with:
+
+```bash
+python tools/convert_sbe_run.py \
+  --run-dir "<LOCAL_SBE_RUN_DIR>/lgcov_k40_nb104" \
+  --band-path "<LOCAL_WANNIER_DIR>/CrI3_band.dat" \
+  --out-dir  "data/samples/demo_bundle_minimal" \
+  --max-points-current 1200 \
+  --max-points-spectrum 800 \
+  --selected-bands 80:90
+```
+
+and is not committed unless the user explicitly approves the resulting
+bundle size and contents.
