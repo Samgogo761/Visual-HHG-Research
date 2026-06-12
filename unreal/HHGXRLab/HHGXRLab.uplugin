@@ -1,7 +1,7 @@
 {
   "FileVersion": 3,
   "Version": 1,
-  "VersionName": "0.1.0",
+  "VersionName": "0.1.1",
   "FriendlyName": "HHG-XR Lab Bundle Loader",
   "Description": "USTRUCTs and a JSON loader for HHG-XR Lab demo bundles (schema id: hhgxr-demo-bundle-v0). Header-only spec + a UBlueprintFunctionLibrary that opens manifest.json and data_small.json from disk.",
   "Category": "Other",
@@ -10,7 +10,6 @@
   "DocsURL": "https://github.com/Samgogo761/Visual-HHG-Research/blob/main/docs/UNREAL_IMPORT.md",
   "MarketplaceURL": "",
   "SupportURL": "",
-  "EngineVersion": "5.3.0",
   "EnabledByDefault": true,
   "CanContainContent": false,
   "IsBetaVersion": true,

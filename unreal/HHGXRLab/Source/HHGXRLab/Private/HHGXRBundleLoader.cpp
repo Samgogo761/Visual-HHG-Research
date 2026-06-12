@@ -193,13 +193,13 @@ namespace
         }
     }
 
+    // Uses the typed accessor so we never touch FJsonObject::TryGetField,
+    // whose signature changed between UE 5.3 (returns const TSharedPtr&) and
+    // UE 5.4+ (returns const TSharedPtr*). TryGetNumberField(FString, double&)
+    // has been stable since UE 5.0.
     bool TryGetDouble(const TSharedPtr<FJsonObject>& Obj, const FString& Key, double& Out)
     {
-        if (!Obj.IsValid() || !Obj->HasField(Key)) return false;
-        const TSharedPtr<FJsonValue> V = Obj->TryGetField(Key);
-        if (!V.IsValid() || V->Type != EJson::Number) return false;
-        Out = V->AsNumber();
-        return true;
+        return Obj.IsValid() && Obj->TryGetNumberField(Key, Out);
     }
 
     EHHGXRFieldSource ParseFieldSource(const FString& Raw)
