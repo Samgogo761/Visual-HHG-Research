@@ -4,9 +4,14 @@ Header-only `USTRUCT` spec for the **`hhgxr-demo-bundle-v0`** schema
 plus a `UBlueprintFunctionLibrary` that opens `manifest.json` and
 `data_small.json` from disk into those structs. No `.uproject`.
 
-Target engine: **Unreal Engine 5.3+**. Should also build on 5.4 / 5.5
-without modification — the only engine APIs used are `FJsonSerializer`,
-`FFileHelper::LoadFileToString`, and `FPaths::Combine`.
+Target engine: **Unreal Engine 5.3 – 5.7+** (the `.uplugin` deliberately
+does not pin `EngineVersion`, so any 5.x host loads the plugin without
+the "incompatible" popup). The only engine APIs used are
+`FJsonSerializer`, `FFileHelper::LoadFileToString`, `FPaths::Combine`,
+and the typed `FJsonObject::TryGetXxxField` accessors. The loader
+deliberately avoids `FJsonObject::TryGetField` because its return type
+changed from `const TSharedPtr<FJsonValue>&` (5.3) to
+`const TSharedPtr<FJsonValue>*` (5.4+).
 
 ---
 
@@ -136,3 +141,45 @@ on top of this plugin:
 
 None of those ship in this directory yet — this is the
 "data-structures + loader" layer only.
+
+---
+
+## Troubleshooting
+
+### "HHGXRLab is incompatible" popup
+
+The `.uplugin` no longer pins `EngineVersion`. If you still see this on
+a 5.5+ host, your `Plugins/HHGXRLab/` copy may be stale; recopy from
+`unreal/HHGXRLab/` and regenerate project files.
+
+### "HHGXRHost could not be compiled"
+
+This popup is generic — the real error is in the compile log.
+
+- **From the editor**: re-open the project, and when the popup appears
+  click **Show Output Log**, then scroll for lines starting with
+  `error:` (clang) or `error C\d+:` (MSVC).
+- **From Visual Studio**: open the generated `.sln`, set the
+  `Development Editor` configuration, and **Build > Build Solution**.
+  The Output / Build pane shows the underlying compiler error.
+- **From the log directly**: `<YourProject>/Saved/Logs/<YourProject>.log`
+  is the most recent run; the most useful section is between the
+  `Compile attempt: HHGXRLab` and `BuildEvent` markers.
+
+If the host project is **Blueprint-only**, UE will still try to compile
+the plugin's C++ source when it loads. To produce a clean rebuild path:
+
+1. In the editor: **Tools > New C++ Class > None**, accept the default
+   names, and let UE create a minimal game C++ module. (You can delete
+   the class file afterwards, but the project must keep at least one
+   C++ source so the Build target exists.)
+2. Close the editor.
+3. Right-click `<YourProject>.uproject` again and choose **Generate
+   Visual Studio project files**.
+4. Open the `.sln`, build, and reopen the editor.
+
+### "Missing HHGXRHost Modules" popup
+
+This is normal the first time the plugin is added. Click **Yes** to
+build modules; if that fails, follow the steps above to inspect the
+actual compile error.
