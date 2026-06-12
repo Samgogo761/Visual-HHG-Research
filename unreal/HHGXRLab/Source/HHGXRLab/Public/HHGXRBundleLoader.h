@@ -30,6 +30,14 @@ public:
                            FHHGXRBundle& OutBundle,
                            FString& OutError);
 
+    /**
+     * Load a bundle and return a human-readable multi-line summary, or an
+     * "LOAD FAILED: ..." string on error. One-call verification helper so a
+     * Blueprint smoke test is just BeginPlay -> DescribeBundle -> Print String.
+     */
+    UFUNCTION(BlueprintCallable, Category = "HHG-XR|Bundle")
+    static FString DescribeBundle(const FString& BundleDirAbs);
+
     /** True iff ModuleName appears in Manifest.AvailableModules. */
     UFUNCTION(BlueprintPure, Category = "HHG-XR|Manifest")
     static bool HasModule(const FHHGXRManifest& Manifest, const FString& ModuleName);

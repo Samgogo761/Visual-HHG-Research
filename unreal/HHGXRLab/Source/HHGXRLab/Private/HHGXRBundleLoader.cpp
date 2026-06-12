@@ -501,6 +501,43 @@ bool UHHGXRBundleLoader::LoadBundle(const FString& BundleDirAbs,
     return true;
 }
 
+FString UHHGXRBundleLoader::DescribeBundle(const FString& BundleDirAbs)
+{
+    FHHGXRBundle Bundle;
+    FString Error;
+    if (!LoadBundle(BundleDirAbs, Bundle, Error))
+    {
+        return FString::Printf(TEXT("LOAD FAILED: %s"), *Error);
+    }
+
+    const FHHGXRManifest& M = Bundle.Manifest;
+    const FHHGXRDimensions& D = M.Dimensions;
+    const FHHGXRBandPath& BP = Bundle.Data.BandPath;
+
+    TArray<FString> Lines;
+    Lines.Add(FString::Printf(TEXT("schema       : %s"), *M.Schema));
+    Lines.Add(FString::Printf(TEXT("dataset      : %s"), *M.DatasetName));
+    Lines.Add(FString::Printf(TEXT("source_class : %s"), *M.Provenance.SourceClass));
+    Lines.Add(FString::Printf(TEXT("gauge        : %s"), *M.Provenance.GaugeMethod));
+    Lines.Add(FString::Printf(TEXT("dims         : nt=%d nkx=%d nky=%d n_bands=%d n_val=%d"),
+        D.Nt, D.Nkx, D.Nky, D.NBands, D.NValence));
+    Lines.Add(FString::Printf(TEXT("field.source : %s"), *FieldSourceBadge(Bundle.Data.Field)));
+    Lines.Add(FString::Printf(TEXT("available(%d): %s"),
+        M.AvailableModules.Num(), *FString::Join(M.AvailableModules, TEXT(", "))));
+    Lines.Add(FString::Printf(TEXT("missing(%d)  : %s"),
+        M.MissingModules.Num(), *FString::Join(M.MissingModules, TEXT(", "))));
+    Lines.Add(FString::Printf(TEXT("band_path    : layout=%s n_bands=%d near_gap=%d eFermi=%s"),
+        *BP.Layout, BP.NBands, BP.NearGapBandIndices.Num(),
+        BP.bHasEFermi ? *FString::SanitizeFloat(BP.EFermiEv) : TEXT("n/a")));
+    Lines.Add(FString::Printf(TEXT("time_series  : %d points"), Bundle.Data.TimeSeries.TimeFs.Num()));
+    Lines.Add(FString::Printf(TEXT("spectrum     : %d points"), Bundle.Data.Spectrum.HarmonicOrder.Num()));
+    Lines.Add(FString::Printf(TEXT("occupation   : %d snapshots"), Bundle.Data.OccupationPreview.Snapshots.Num()));
+    Lines.Add(FString::Printf(TEXT("coherence    : %d snapshots"), Bundle.Data.CoherencePreview.Snapshots.Num()));
+    Lines.Add(FString::Printf(TEXT("quicklook    : %s"), *Bundle.QuicklookPath));
+
+    return FString::Join(Lines, TEXT("\n"));
+}
+
 bool UHHGXRBundleLoader::HasModule(const FHHGXRManifest& Manifest, const FString& ModuleName)
 {
     return Manifest.AvailableModules.Contains(ModuleName);
