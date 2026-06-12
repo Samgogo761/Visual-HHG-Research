@@ -83,6 +83,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         "long-format files; 0-based for legacy wide format.")
     p.add_argument("--max-grid", type=int, default=40,
                    help="Maximum kx/ky grid points kept in grid previews.")
+    p.add_argument("--near-gap-window-eV", type=float, default=5.0,
+                   help="Energy window around the Fermi level used to pick "
+                        "near-gap bands for the band_path quicklook default. "
+                        "If <1 or >20 bands fall in the window, fall back to "
+                        "the 20 bands with mean energy closest to the Fermi level.")
+    p.add_argument("--max-near-gap-bands", type=int, default=20,
+                   help="Cap on the near_gap_band_indices list emitted into band_path.")
     p.add_argument("--max-occ-snapshots", type=int, default=8,
                    help="Maximum occupation snapshots kept in data_small.json.")
     p.add_argument("--emit-npz", action="store_true",
@@ -613,13 +620,89 @@ def build_spectrum(hhg: np.ndarray | None, n_max: int) -> dict:
     return out
 
 
-def build_band_path(band_file: np.ndarray | None) -> dict:
+def build_band_path(band_file: np.ndarray | None,
+                    e_fermi_eV: float | None = None,
+                    near_gap_window_eV: float = 5.0,
+                    max_near_gap_bands: int = 20) -> dict:
+    """Parse a Wannier-style band-path file.
+
+    Two layouts are recognized:
+
+    * Wannier90 ``wannier90_band.dat`` long format: two columns
+      (``k_path``, ``E``), every band written as a contiguous block,
+      blank lines between bands. Total row count = ``n_k * n_bands``.
+      Detected by the k-path wrapping back from end-of-band to
+      start-of-band.
+    * Legacy wide format: ``k_path E1 E2 ... E_nbands`` per row.
+
+    The output always carries a 2D ``energy_eV`` of shape
+    ``[n_k][n_bands]``, plus a ``near_gap_band_indices`` hint (0-based
+    band indices intersecting an ``[E_fermi +/- window]`` slab, with a
+    closest-N fallback) so that a 100+-band file does not need to be
+    drawn as a single visual blob by downstream clients.
+    """
     if band_file is None or band_file.ndim != 2 or band_file.shape[1] < 2:
         return {}
-    return {
-        "k_path":    band_file[:, 0].astype(float).tolist(),
-        "energy_eV": band_file[:, 1:].astype(float).tolist(),
+
+    n_cols = band_file.shape[1]
+    layout = "wide"
+    k_path = band_file[:, 0]
+    energies = band_file[:, 1:]
+
+    if n_cols == 2:
+        wraps = np.where(np.diff(k_path) < -1e-12)[0] + 1
+        if wraps.size > 0:
+            boundaries = np.concatenate([[0], wraps, [len(k_path)]])
+            chunk_lens = np.diff(boundaries)
+            if chunk_lens.size > 1 and np.all(chunk_lens == chunk_lens[0]):
+                n_bands = int(chunk_lens.size)
+                n_k = int(chunk_lens[0])
+                layout = "wannier90_long"
+                k_path = band_file[:n_k, 0]
+                energies = band_file[:, 1].reshape(n_bands, n_k).T  # (n_k, n_bands)
+
+    n_bands = int(energies.shape[1])
+    near_gap = _compute_near_gap_bands(energies, e_fermi_eV,
+                                       near_gap_window_eV, max_near_gap_bands)
+    out: dict[str, Any] = {
+        "k_path":              k_path.astype(float).tolist(),
+        "energy_eV":           energies.astype(float).tolist(),
+        "n_bands":             n_bands,
+        "layout":              layout,
+        "near_gap_band_indices": near_gap,
+        "near_gap_window_eV":  float(near_gap_window_eV),
+        "band_index_base":     0,
+        "note": (
+            "energy_eV is shape [n_k][n_bands]. near_gap_band_indices is a "
+            "0-based default-render hint; clients are free to render any subset."
+        ),
     }
+    if e_fermi_eV is not None:
+        out["e_fermi_eV"] = float(e_fermi_eV)
+    return out
+
+
+def _compute_near_gap_bands(energies: np.ndarray,
+                            e_fermi_eV: float | None,
+                            window_eV: float,
+                            max_count: int) -> list[int]:
+    """Pick band indices whose energy range intersects [Ef-window, Ef+window].
+
+    Falls back to the closest-mean-to-Ef set capped at ``max_count`` when
+    the intersection is empty or larger than ``max_count``."""
+    if energies.ndim != 2 or energies.shape[1] == 0:
+        return []
+    fermi = 0.0 if e_fermi_eV is None else float(e_fermi_eV)
+    mins = energies.min(axis=0)
+    maxs = energies.max(axis=0)
+    lo, hi = fermi - window_eV, fermi + window_eV
+    mask = (maxs >= lo) & (mins <= hi)
+    indices = np.where(mask)[0]
+    if 1 <= indices.size <= max_count:
+        return sorted(int(i) for i in indices)
+    means = energies.mean(axis=0)
+    order = np.argsort(np.abs(means - fermi))
+    return sorted(int(i) for i in order[:max_count])
 
 
 def _grid_strides(nkx: int, nky: int, max_grid: int) -> tuple[int, int]:
@@ -812,7 +895,10 @@ def main(argv: list[str] | None = None) -> int:
     time_series, t_axis = build_time_series(jt, jt_d, jt_v, jt_s, args.max_points_current)
     spectrum = build_spectrum(hhg, args.max_points_spectrum)
     spectrum_spin = build_spectrum(hhg_sp, args.max_points_spectrum)
-    band_path = build_band_path(band_path_arr)
+    e_fermi_eV = float(nml["E_fermi_eV"]) if "E_fermi_eV" in nml else None
+    band_path = build_band_path(band_path_arr, e_fermi_eV,
+                                args.near_gap_window_eV,
+                                args.max_near_gap_bands)
     band_grid_preview = build_band_grid_preview(bg, selected, args.max_grid)
     geometry_preview = build_quantum_geometry_preview(qg, selected, args.max_grid)
     occupation_preview = build_occupation_preview(occ, args.max_occ_snapshots, args.max_grid)

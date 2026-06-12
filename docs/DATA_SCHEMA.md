@@ -215,6 +215,41 @@ of the spin-z current (`HHG_spin.dat`).
 
 ```json
 "band_path": {
+  "k_path":              [...],           // length n_k
+  "energy_eV":           [[...], ...],    // shape [n_k][n_bands], 2D
+  "n_bands":             112,
+  "layout":              "wannier90_long" | "wide",
+  "e_fermi_eV":          0.0843,          // when known from input.nml
+  "near_gap_band_indices": [...],         // 0-based default-render hint
+  "near_gap_window_eV":  5.0,
+  "band_index_base":     0,
+  "note":                "..."
+}
+```
+
+Two source layouts are recognized:
+
+- **Wannier90 long format** (`wannier90_band.dat`): 2 columns
+  `k_path E`, every band written as a contiguous block, blank lines
+  between bands. Detected by the k-path wrapping back. This is the
+  current CrI3 baseline.
+- **Wide format**: legacy single-table `k E1 E2 ... E_nbands` per row.
+
+`energy_eV` is always 2D after conversion (rows = k-points,
+columns = bands), regardless of the source layout, so downstream code
+does not need to distinguish.
+
+`near_gap_band_indices` is a small hint listing 0-based band indices
+whose energy range intersects `[E_fermi - window, E_fermi + window]`.
+If that intersection is empty or wider than `max_near_gap_bands`
+(default 20), the converter falls back to the bands with the
+mean-energy closest to `E_fermi`. Clients are free to render any
+subset they like; this hint exists so the default Unreal/quicklook
+view of a 100+-band Wannier file does not turn into a single visual
+blob.
+
+```json
+"band_path": {
   "k_path":    [...],          // shape: [n_k_path]
   "energy_eV": [[...], ...]    // shape: [n_k_path][n_bands_selected]
 }

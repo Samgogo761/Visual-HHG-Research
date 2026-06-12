@@ -48,11 +48,32 @@ def _plot_band_path(ax, bp: dict[str, Any]) -> None:
     if not k or not e:
         _placeholder(ax, "Band path", "band_path missing")
         return
-    e0 = e[0] if isinstance(e[0], list) else [e[0]]
-    n_bands = len(e0)
-    for b in range(min(n_bands, 30)):
-        ax.plot(k, [row[b] for row in e], lw=0.8)
-    ax.set_title("Band path  (eV)")
+
+    nested = isinstance(e[0], list)
+    e0 = e[0] if nested else [e[0]]
+    n_bands_total = len(e0)
+
+    near_gap = bp.get("near_gap_band_indices") or []
+    if near_gap:
+        indices = [b for b in near_gap if 0 <= b < n_bands_total]
+        suffix = f"  near-gap [{len(indices)}/{n_bands_total}]"
+    else:
+        indices = list(range(min(n_bands_total, 30)))
+        suffix = "" if n_bands_total <= 30 else f"  first 30/{n_bands_total}"
+
+    if nested:
+        for b in indices:
+            ax.plot(k, [row[b] for row in e], lw=0.8)
+    else:
+        ax.plot(k, e, lw=0.8)
+
+    fermi = bp.get("e_fermi_eV")
+    if fermi is not None:
+        ax.axhline(fermi, color="#888888", lw=0.6, linestyle="--", alpha=0.6,
+                   label=f"E_F = {fermi:+.3f} eV")
+        ax.legend(loc="lower right", fontsize=7, frameon=False)
+
+    ax.set_title(f"Band path  (eV){suffix}")
     ax.set_xlabel("k path")
     ax.set_ylabel("E (eV)")
 

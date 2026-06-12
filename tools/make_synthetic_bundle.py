@@ -172,6 +172,9 @@ def write_synthetic_run(run_dir: Path,
 
     # input.nml in the solver's namelist vocabulary
     (run_dir / "input.nml").write_text(
+        "&crystal\n"
+        "  E_fermi_eV = 0.0843\n"
+        "/\n"
         "&laser\n"
         "  wvl_nm = 3200.0,\n"
         "  intensity_Wcm2 = 8.8e8,\n"
@@ -198,12 +201,28 @@ def write_synthetic_run(run_dir: Path,
     )
 
 
-def write_synthetic_band_path(path: Path, n_k: int = 80, n_bands: int = 8) -> None:
+def write_synthetic_band_path(path: Path, n_k: int = 80, n_bands: int = 8,
+                              layout: str = "wannier90_long") -> None:
+    """Write a synthetic band-path file in either format.
+
+    ``wannier90_long`` (default): 2 columns (k, E), one band per contiguous
+    block, blank lines between bands -- matches CrI3_band.dat from Wannier90.
+    ``wide``: legacy single-table layout (k E1 E2 ... E_nbands).
+    """
     k = np.linspace(0.0, 1.0, n_k)
-    cols = [k]
-    for b in range(n_bands):
-        cols.append(np.cos(np.pi * k) * 0.3 + 0.4 * b - 1.0)
-    np.savetxt(path, np.column_stack(cols))
+    if layout == "wide":
+        cols = [k]
+        for b in range(n_bands):
+            cols.append(np.cos(np.pi * k) * 0.3 + 0.4 * b - 1.0)
+        np.savetxt(path, np.column_stack(cols))
+        return
+
+    with path.open("w") as fh:
+        for b in range(n_bands):
+            energies = np.cos(np.pi * k) * 0.3 + 0.4 * (b - n_bands / 2 + 0.5)
+            for ki, ei in zip(k, energies):
+                fh.write(f"{ki:.6f}  {ei:.6E}\n")
+            fh.write("\n")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -147,6 +147,19 @@ def check_band_path(bp: dict[str, Any], issues: Issues) -> None:
         return
     if len(k) != len(e):
         issues.err(f"band_path.k_path length {len(k)} != energy_eV length {len(e)}")
+        return
+    if e and isinstance(e[0], list):
+        n_bands_row = len(e[0])
+        for i, row in enumerate(e):
+            if not isinstance(row, list) or len(row) != n_bands_row:
+                issues.err(f"band_path.energy_eV[{i}] has length {len(row) if hasattr(row, '__len__') else 'scalar'}, expected {n_bands_row}")
+                return
+        n_bands_meta = bp.get("n_bands")
+        if n_bands_meta is not None and n_bands_meta != n_bands_row:
+            issues.err(f"band_path.n_bands={n_bands_meta} but energy_eV row width is {n_bands_row}")
+        near = bp.get("near_gap_band_indices") or []
+        if not isinstance(near, list) or any(not isinstance(i, int) or not 0 <= i < n_bands_row for i in near):
+            issues.err("band_path.near_gap_band_indices contains invalid entries")
 
 
 def check_field(field: dict[str, Any], issues: Issues) -> None:

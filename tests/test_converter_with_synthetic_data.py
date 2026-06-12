@@ -145,6 +145,52 @@ def test_no_occupation_means_module_missing(tmp_path: Path) -> None:
         assert mod not in manifest["available_modules"]
 
 
+def test_band_path_wannier_long_format(tmp_path: Path) -> None:
+    """CrI3_band.dat is 2-column Wannier90 long format (k, E) with bands
+    separated by blank lines. The converter must detect this and reshape
+    into a (n_k, n_bands) energy_eV table, otherwise a 100+-band file
+    flattens into a single 70k-point polyline (the production bug)."""
+    run_dir = tmp_path / "run"
+    band_path = tmp_path / "wannier" / "CrI3_band.dat"
+    band_path.parent.mkdir(parents=True)
+    write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=8)
+    n_k, n_bands = 50, 10
+    write_synthetic_band_path(band_path, n_k=n_k, n_bands=n_bands,
+                              layout="wannier90_long")
+
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir, band_path) == 0
+
+    ds = json.loads((out_dir / "data_small.json").read_text())
+    bp = ds["band_path"]
+    assert bp["layout"] == "wannier90_long"
+    assert bp["n_bands"] == n_bands
+    assert len(bp["k_path"]) == n_k
+    assert len(bp["energy_eV"]) == n_k
+    assert all(len(row) == n_bands for row in bp["energy_eV"])
+    assert bp["e_fermi_eV"] == pytest.approx(0.0843)
+    near = bp["near_gap_band_indices"]
+    assert 1 <= len(near) <= n_bands
+    assert all(0 <= b < n_bands for b in near)
+
+
+def test_band_path_wide_format_still_supported(tmp_path: Path) -> None:
+    """Legacy wide-format band file (k E1 E2 ... EN per row) must keep
+    working alongside the new long-format detection."""
+    run_dir = tmp_path / "run"
+    band_path = tmp_path / "wannier" / "wide_band.dat"
+    band_path.parent.mkdir(parents=True)
+    write_synthetic_run(run_dir, nt=300, nkx=6, nky=6, n_bands=8)
+    write_synthetic_band_path(band_path, n_k=40, n_bands=6, layout="wide")
+
+    out_dir = tmp_path / "bundle"
+    assert _convert(run_dir, out_dir, band_path) == 0
+    bp = json.loads((out_dir / "data_small.json").read_text())["band_path"]
+    assert bp["layout"] == "wide"
+    assert bp["n_bands"] == 6
+    assert len(bp["energy_eV"][0]) == 6
+
+
 def test_coherence_preview(tmp_path: Path) -> None:
     """coherence_kt.dat is the solver's Item-2 export. The reader must
     propagate the t=0 invariant (coherence_norm == 0 everywhere) and

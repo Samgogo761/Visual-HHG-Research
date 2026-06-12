@@ -10,6 +10,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 BUNDLE = REPO / "data" / "samples" / "demo_bundle_minimal"
 
@@ -55,6 +57,24 @@ def test_occupation_module_in_sample_bundle() -> None:
     occ = data_small.get("occupation_preview") or {}
     assert occ.get("snapshots"), "occupation_preview.snapshots must be non-empty"
     assert "definition" in occ
+
+
+def test_band_path_is_reshaped_for_long_format() -> None:
+    """The committed bundle exercises the Wannier90 long-format path
+    (synthetic CrI3_band.dat is 2-column with blank-line band breaks).
+    Verify the converter reshapes correctly and emits the near-gap hint
+    so Unreal can default to a near-gap subset instead of dumping 100+
+    bands at once."""
+    data_small = json.loads((BUNDLE / "data_small.json").read_text())
+    bp = data_small["band_path"]
+    assert bp["layout"] == "wannier90_long"
+    assert bp["n_bands"] >= 4
+    # energy_eV must be (n_k, n_bands); k_path length matches outer dimension
+    assert isinstance(bp["energy_eV"][0], list)
+    assert len(bp["k_path"]) == len(bp["energy_eV"])
+    assert len(bp["energy_eV"][0]) == bp["n_bands"]
+    assert "near_gap_band_indices" in bp and bp["near_gap_band_indices"]
+    assert bp["e_fermi_eV"] == pytest.approx(0.0843)
 
 
 def test_coherence_module_in_sample_bundle() -> None:

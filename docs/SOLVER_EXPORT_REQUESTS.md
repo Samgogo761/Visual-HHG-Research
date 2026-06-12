@@ -47,6 +47,34 @@ occupation_band_kt.dat   # too large for full112 as plain text; defer to a
                          # windowed or NPZ variant if/when needed.
 ```
 
+### First real bundle physics audit (local, 2026-06-12)
+
+Run `convert_sbe_run.py` against the verify_obs_exports run reproduced
+the expected physics end-to-end:
+
+- **E(t) shape**: 1009 sample points, t in [0, 42.67] fs; 8 zero
+  crossings ~ 4 optical cycles at 3200 nm (T_opt = 10.67 fs);
+  envelope center at t ~ 21.33 fs. Confirms `ncyc = 4` drives the
+  pulse length; `T2_cycles = 1.0` affects only dephasing.
+- **HHG low order**: H1 = 2.47e-2, H3 = 5.73e-4, H5 = 2.73e-6,
+  H7 = 1.82e-6 (clean odd-harmonic decay).
+- **HHG high order**: dominant peaks near H253 (odd) and H505
+  (likely numerical alias) — sanity but not core for v1 visualization.
+- **band_path** (audit caught the converter bug — fixed in this commit):
+  CrI3_band.dat is Wannier90 long format, 71456 rows = 638 k-pts x
+  112 bands. The pre-fix converter flattened it into a single polyline;
+  the fix reshapes to a (n_k, n_bands) table and ships
+  `near_gap_band_indices` plus `e_fermi_eV` for client-side
+  filtering.
+- **delta_n_cond**: mean over k-grid rises from 0 at t=0 to 0.476 at
+  t ~ 35.6 fs (occupied conduction snapshots). Peak lags the field
+  amplitude peak by ~14 fs, consistent with cumulative excitation
+  modulated by T2 ~ 10.7 fs dephasing; nonzero residual at t ~ 42 fs
+  confirms incomplete relaxation. Physically correct.
+
+Bundle size for this run was ~8 MB local (no `.npz`). After the
+band_path reshape fix it drops by ~1.5 MB.
+
 Below is the original work plan, kept for reference.
 
 ---

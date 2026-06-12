@@ -36,16 +36,21 @@ Source: `data_small.band_path.{k_path, energy_eV}`.
 
 Render as 2D line plot in a UMG widget or a 3D ribbon along the k-path.
 
-The first-demo dataset carries 104 bands. **Do not render all of them
-by default.** Recommended UI:
+The first-demo dataset carries 112 bands. **Do not render all of them
+by default.** The converter already does the selection work:
 
-- Default view: ~10-20 bands closest to the gap. The user can supply
-  the slice from `manifest.dimensions.n_bands` and a band-index offset
-  hint, or the client can heuristically pick bands whose value at the
-  center of the k-path is closest to zero.
+- `data_small.band_path.near_gap_band_indices` is the default render
+  list (0-based, capped at ~20). It is computed by intersecting each
+  band's energy range with `[E_fermi - window, E_fermi + window]`
+  (default window 5 eV; see `--near-gap-window-eV`), with a
+  closest-mean fallback when the intersection is empty or too wide.
+- `data_small.band_path.e_fermi_eV` carries the Fermi level (when
+  `&crystal E_fermi_eV` was set in `input.nml`); render a faint
+  horizontal guide line at this energy.
 - A toggle "near-gap bands / full bands" lets the viewer fall back to
-  the full set.
-- The full 104-band view is always there but never the default.
+  the full set, which is always available as the full 2D
+  `band_path.energy_eV` array.
+- The full 112-band view is always there but never the default.
 
 ### Panel B — Driving field E(t) and A(t)
 
