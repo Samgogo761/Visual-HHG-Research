@@ -1,9 +1,9 @@
 {
   "FileVersion": 3,
-  "Version": 2,
-  "VersionName": "0.2.0",
+  "Version": 3,
+  "VersionName": "0.3.0",
   "FriendlyName": "HHG-XR Lab Bundle Loader",
-  "Description": "USTRUCTs + JSON loader + reference viewer Actor (3D band surface) for HHG-XR Lab demo bundles (schema id: hhgxr-demo-bundle-v0).",
+  "Description": "USTRUCTs + JSON loader + reference viewer Actor (3D band surface with occupation-over-time animation) for HHG-XR Lab demo bundles (schema id: hhgxr-demo-bundle-v0).",
   "Category": "Other",
   "CreatedBy": "HHG-XR Lab",
   "CreatedByURL": "https://github.com/Samgogo761/Visual-HHG-Research",

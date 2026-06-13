@@ -19,12 +19,26 @@ namespace
         FLinearColor(0.70f, 0.30f, 1.00f),  // purple
         FLinearColor(1.00f, 0.45f, 0.80f),  // pink
     };
+
+    // Nearest-neighbour sample of a 2D grid at a band-vertex index, so the
+    // occupation grid and the band grid need not have identical dimensions.
+    float SampleGrid(const FHHGXRFloatGrid2D& G, int32 I, int32 J,
+                     int32 NumRows, int32 NumCols)
+    {
+        if (!G.IsValid2D()) return 0.0f;
+        const int32 GI = (NumRows <= 1) ? 0
+            : FMath::RoundToInt(static_cast<float>(I) * (G.NumRows - 1) / (NumRows - 1));
+        const int32 GJ = (NumCols <= 1) ? 0
+            : FMath::RoundToInt(static_cast<float>(J) * (G.NumCols - 1) / (NumCols - 1));
+        return G.At(FMath::Clamp(GI, 0, G.NumRows - 1),
+                    FMath::Clamp(GJ, 0, G.NumCols - 1));
+    }
 } // namespace
 
 
 AHHGXRBundleViewerActor::AHHGXRBundleViewerActor()
 {
-    PrimaryActorTick.bCanEverTick = false;
+    PrimaryActorTick.bCanEverTick = true;
 
     USceneComponent* Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
     SetRootComponent(Root);
@@ -36,6 +50,8 @@ AHHGXRBundleViewerActor::AHHGXRBundleViewerActor()
     ProvenanceBadge = CreateDefaultSubobject<UTextRenderComponent>(TEXT("ProvenanceBadge"));
     ProvenanceBadge->SetupAttachment(Root);
     ProvenanceBadge->SetRelativeLocation(FVector(0.0f, 0.0f, BadgeHeight));
+    // Default text faces +X; flip so it reads from the common -X viewpoint.
+    ProvenanceBadge->SetRelativeRotation(FRotator(0.0f, 180.0f, 0.0f));
     ProvenanceBadge->SetHorizontalAlignment(EHTA_Center);
     ProvenanceBadge->SetVerticalAlignment(EVRTA_TextBottom);
     ProvenanceBadge->SetTextRenderColor(FColor(220, 220, 220));
@@ -46,9 +62,28 @@ AHHGXRBundleViewerActor::AHHGXRBundleViewerActor()
 void AHHGXRBundleViewerActor::BeginPlay()
 {
     Super::BeginPlay();
+    bIsPlaying = true;
+    AnimAccumSeconds = 0.0f;
     if (!BundleDirAbs.IsEmpty())
     {
         RebuildFromBundle();
+    }
+}
+
+void AHHGXRBundleViewerActor::Tick(float DeltaSeconds)
+{
+    Super::Tick(DeltaSeconds);
+    if (!bIsPlaying || !bAnimateInPlay || !bShowOccupation) return;
+
+    const int32 NumSnaps = OccCache.Snapshots.Num();
+    if (NumSnaps <= 1) return;
+
+    AnimAccumSeconds += DeltaSeconds;
+    if (AnimAccumSeconds >= SecondsPerSnapshot)
+    {
+        AnimAccumSeconds = 0.0f;
+        SnapshotIndex = (SnapshotIndex + 1) % NumSnaps;
+        ApplySnapshot();
     }
 }
 
@@ -56,20 +91,29 @@ void AHHGXRBundleViewerActor::BeginPlay()
 void AHHGXRBundleViewerActor::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
     Super::PostEditChangeProperty(PropertyChangedEvent);
-    if (bAutoRebuildInEditor)
+    if (!bAutoRebuildInEditor) return;
+
+    if (ProvenanceBadge)
     {
-        if (ProvenanceBadge)
-        {
-            ProvenanceBadge->SetRelativeLocation(FVector(0.0f, 0.0f, BadgeHeight));
-        }
-        if (!BundleDirAbs.IsEmpty())
-        {
-            RebuildFromBundle();
-        }
-        else
-        {
-            ClearMesh();
-        }
+        ProvenanceBadge->SetRelativeLocation(FVector(0.0f, 0.0f, BadgeHeight));
+    }
+
+    static const TSet<FName> ColorOnly = {
+        TEXT("SnapshotIndex"), TEXT("OccupationGain"),
+        TEXT("DimFloor"), TEXT("bShowOccupation")
+    };
+    const FName Changed = PropertyChangedEvent.GetPropertyName();
+    if (ColorOnly.Contains(Changed) && BandCache.Num() > 0)
+    {
+        ApplySnapshot();
+    }
+    else if (!BundleDirAbs.IsEmpty())
+    {
+        RebuildFromBundle();
+    }
+    else
+    {
+        ClearMesh();
     }
 }
 #endif
@@ -80,6 +124,8 @@ void AHHGXRBundleViewerActor::ClearMesh()
     {
         MeshComponent->ClearAllMeshSections();
     }
+    BandCache.Reset();
+    OccCache = FHHGXROccupationPreview();
     if (ProvenanceBadge)
     {
         ProvenanceBadge->SetText(FText::FromString(TEXT("HHG-XR (no bundle loaded)")));
@@ -110,8 +156,21 @@ void AHHGXRBundleViewerActor::RebuildFromBundle()
         return;
     }
 
+    // Cache animation state.
+    OccCache = Bundle.Data.OccupationPreview;
+    NValence = Bundle.Manifest.Dimensions.NValence;
+    ProvenanceBaseText = FString::Printf(TEXT("%s | %s | field: %s"),
+        *Bundle.Manifest.Provenance.SourceClass,
+        *Bundle.Manifest.Provenance.GaugeMethod,
+        *UHHGXRBundleLoader::FieldSourceBadge(Bundle.Data.Field));
+    if (ProvenanceBadge)
+    {
+        const FLinearColor C = UHHGXRBundleLoader::FieldSourceColor(Bundle.Data.Field.Source);
+        ProvenanceBadge->SetTextRenderColor(C.ToFColor(/*bSRGB*/ true));
+    }
+
     BuildBandSurfaces(Bundle);
-    UpdateProvenanceBadge(Bundle);
+    ApplySnapshot();
 }
 
 void AHHGXRBundleViewerActor::BuildBandSurfaces(const FHHGXRBundle& Bundle)
@@ -129,7 +188,6 @@ void AHHGXRBundleViewerActor::BuildBandSurfaces(const FHHGXRBundle& Bundle)
     const bool bHave2DGrid = BGP.KxGrid.IsValid2D() && BGP.KyGrid.IsValid2D();
     const bool bHave1DAxes = (BGP.Kx.Num() == EStack.NumRows)
                           && (BGP.Ky.Num() == EStack.NumCols);
-
     if (!bHave2DGrid && !bHave1DAxes)
     {
         UE_LOG(LogHHGXRViewer, Warning,
@@ -142,23 +200,27 @@ void AHHGXRBundleViewerActor::BuildBandSurfaces(const FHHGXRBundle& Bundle)
     const int32 NumBands = EStack.NumSlices;
     int32 TotalTris = 0;
 
+    BandCache.Reset();
+    BandCache.Reserve(NumBands);
+
     for (int32 Band = 0; Band < NumBands; ++Band)
     {
-        TArray<FVector> Vertices;
-        TArray<int32> Triangles;
-        TArray<FVector> Normals;
-        TArray<FVector2D> UV0;
-        TArray<FProcMeshTangent> Tangents;
-        TArray<FLinearColor> VertexColors;
+        FHHGXRBandSectionCache BC;
+        BC.NumRows = NumRows;
+        BC.NumCols = NumCols;
+        BC.BaseColor = BandPalette[Band % UE_ARRAY_COUNT(BandPalette)];
+        BC.GlobalBandIndex = BGP.SelectedBandIndices.IsValidIndex(Band)
+            ? BGP.SelectedBandIndices[Band] : (Band + 1);
+        // n_val valence bands are 1..NValence; anything above is conduction.
+        BC.bConduction = (NValence <= 0) ? true : (BC.GlobalBandIndex > NValence);
 
         const int32 NumVerts = NumRows * NumCols;
-        Vertices.Reserve(NumVerts);
-        VertexColors.Reserve(NumVerts);
-        Normals.Reserve(NumVerts);
-        UV0.Reserve(NumVerts);
-        Tangents.Reserve(NumVerts);
-
-        const FLinearColor BandColor = BandPalette[Band % UE_ARRAY_COUNT(BandPalette)];
+        BC.Vertices.Reserve(NumVerts);
+        BC.Normals.Reserve(NumVerts);
+        BC.UV0.Reserve(NumVerts);
+        BC.Tangents.Reserve(NumVerts);
+        TArray<FLinearColor> InitColors;
+        InitColors.Reserve(NumVerts);
 
         for (int32 I = 0; I < NumRows; ++I)
         {
@@ -168,16 +230,18 @@ void AHHGXRBundleViewerActor::BuildBandSurfaces(const FHHGXRBundle& Bundle)
                 const float Ky = bHave2DGrid ? BGP.KyGrid.At(I, J) : BGP.Ky[J];
                 const float E  = EStack.At(Band, I, J);
 
-                Vertices.Add(FVector(Kx * KScale, Ky * KScale, E * EScale));
-                VertexColors.Add(BandColor);
-                Normals.Add(FVector(0.0f, 0.0f, 1.0f));
-                UV0.Add(FVector2D(
+                BC.Vertices.Add(FVector(Kx * KScale, Ky * KScale, E * EScale));
+                BC.Normals.Add(FVector(0.0f, 0.0f, 1.0f));
+                BC.UV0.Add(FVector2D(
                     static_cast<float>(I) / static_cast<float>(FMath::Max(1, NumRows - 1)),
                     static_cast<float>(J) / static_cast<float>(FMath::Max(1, NumCols - 1))));
-                Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
+                BC.Tangents.Add(FProcMeshTangent(1.0f, 0.0f, 0.0f));
+                InitColors.Add(BC.BaseColor);
             }
         }
 
+        TArray<int32> Triangles;
+        Triangles.Reserve((NumRows - 1) * (NumCols - 1) * 6);
         for (int32 I = 0; I < NumRows - 1; ++I)
         {
             for (int32 J = 0; J < NumCols - 1; ++J)
@@ -193,13 +257,14 @@ void AHHGXRBundleViewerActor::BuildBandSurfaces(const FHHGXRBundle& Bundle)
         TotalTris += Triangles.Num() / 3;
 
         MeshComponent->CreateMeshSection_LinearColor(
-            Band, Vertices, Triangles, Normals, UV0, VertexColors, Tangents,
+            Band, BC.Vertices, Triangles, BC.Normals, BC.UV0, InitColors, BC.Tangents,
             /*bCreateCollision*/ false);
-
         if (SurfaceMaterial)
         {
             MeshComponent->SetMaterial(Band, SurfaceMaterial);
         }
+
+        BandCache.Add(MoveTemp(BC));
     }
 
     UE_LOG(LogHHGXRViewer, Log,
@@ -207,19 +272,70 @@ void AHHGXRBundleViewerActor::BuildBandSurfaces(const FHHGXRBundle& Bundle)
         NumBands, NumRows, NumCols, TotalTris);
 }
 
-void AHHGXRBundleViewerActor::UpdateProvenanceBadge(const FHHGXRBundle& Bundle)
+void AHHGXRBundleViewerActor::ApplySnapshot()
 {
-    if (!ProvenanceBadge) return;
+    if (BandCache.Num() == 0)
+    {
+        if (!BundleDirAbs.IsEmpty())
+        {
+            RebuildFromBundle();
+        }
+        return;
+    }
 
-    const FHHGXRManifest& M = Bundle.Manifest;
-    const FString Badge = FString::Printf(
-        TEXT("%s | %s | field: %s"),
-        *M.Provenance.SourceClass,
-        *M.Provenance.GaugeMethod,
-        *UHHGXRBundleLoader::FieldSourceBadge(Bundle.Data.Field));
+    const int32 NumSnaps = OccCache.Snapshots.Num();
+    const bool bUseOcc = bShowOccupation && NumSnaps > 0;
+    if (bUseOcc)
+    {
+        SnapshotIndex = FMath::Clamp(SnapshotIndex, 0, NumSnaps - 1);
+    }
 
-    ProvenanceBadge->SetText(FText::FromString(Badge));
+    const FHHGXRFloatGrid2D* Delta = nullptr;
+    float TimeFs = 0.0f;
+    if (bUseOcc)
+    {
+        Delta = &OccCache.Snapshots[SnapshotIndex].DeltaNCond;
+        TimeFs = OccCache.Snapshots[SnapshotIndex].TimeFs;
+    }
 
-    const FLinearColor C = UHHGXRBundleLoader::FieldSourceColor(Bundle.Data.Field.Source);
-    ProvenanceBadge->SetTextRenderColor(C.ToFColor(/*bSRGB*/ true));
+    for (int32 S = 0; S < BandCache.Num(); ++S)
+    {
+        const FHHGXRBandSectionCache& BC = BandCache[S];
+        TArray<FLinearColor> Colors;
+        Colors.SetNumUninitialized(BC.Vertices.Num());
+
+        for (int32 I = 0; I < BC.NumRows; ++I)
+        {
+            for (int32 J = 0; J < BC.NumCols; ++J)
+            {
+                const int32 V = I * BC.NumCols + J;
+                float Bright = 1.0f;
+                if (bUseOcc && Delta)
+                {
+                    const float Occ = SampleGrid(*Delta, I, J, BC.NumRows, BC.NumCols);
+                    const float Drive = FMath::Clamp(OccupationGain * Occ, 0.0f, 1.0f);
+                    Bright = BC.bConduction
+                        ? FMath::Lerp(DimFloor, 1.0f, Drive)   // conduction lights up
+                        : FMath::Lerp(1.0f, DimFloor, Drive);  // valence depletes
+                }
+                FLinearColor C = BC.BaseColor * Bright;
+                C.A = 1.0f;
+                Colors[V] = C;
+            }
+        }
+
+        MeshComponent->UpdateMeshSection_LinearColor(
+            S, BC.Vertices, BC.Normals, BC.UV0, Colors, BC.Tangents);
+    }
+
+    if (ProvenanceBadge)
+    {
+        FString Text = ProvenanceBaseText;
+        if (bUseOcc)
+        {
+            Text += FString::Printf(TEXT("\nt = %.1f fs   (snap %d/%d)"),
+                TimeFs, SnapshotIndex + 1, NumSnaps);
+        }
+        ProvenanceBadge->SetText(FText::FromString(Text));
+    }
 }

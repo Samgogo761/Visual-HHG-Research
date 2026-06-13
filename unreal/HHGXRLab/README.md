@@ -76,6 +76,37 @@ shows `<source_class> | <gauge> | field: <raw solver / reconstructed
 (not raw) / unavailable>` and is colored green / orange / grey / red to
 match the Python quicklook.
 
+### Occupation over time (k_space_occupation module)
+
+When the bundle carries an `occupation_preview`, the band colors animate
+with the per-k conduction population change `delta_n_cond(k,t)`:
+
+- **conduction** bands (global band index > `n_valence`) brighten where
+  electrons are promoted;
+- **valence** bands (index <= `n_valence`) dim where they are depleted;
+- at `t = 0` `delta_n_cond` is zero everywhere, so conduction starts
+  dim and valence starts bright -- the equilibrium.
+
+Physics-honesty note: the band *geometry never moves*. Band energies are
+static; only the occupation field changes. We deliberately do **not**
+wobble the band height at the laser frequency, because that would imply
+the band structure itself oscillates, which it does not.
+
+Controls (Details panel, category *HHG-XR | Occupation*):
+
+- **Snapshot Index**: scrub through snapshots in the editor; the badge
+  shows `t = <fs>  (snap k/N)`.
+- **Occupation Gain**: brightness response to `delta_n_cond`; raise it
+  to make resonant k-pockets pop sooner.
+- **Dim Floor**: how dark an unexcited conduction (or fully depleted
+  valence) band gets (0..1).
+- **Show Occupation**: off => flat band palette (the old static look).
+- **Animate In Play** + **Seconds Per Snapshot**: press **Play** and the
+  snapshots auto-advance so the pulse plays out; for
+  `verify_obs_exports_20260611` you should see conduction k-pockets
+  light up around the pulse peak (~21 fs / mid-snapshot) and stay
+  partially lit afterwards (incomplete T2 relaxation).
+
 ### Expected look for `verify_obs_exports_20260611`
 
 - 4 sheets (one per `selected_band_indices`, default range 80..90 from
