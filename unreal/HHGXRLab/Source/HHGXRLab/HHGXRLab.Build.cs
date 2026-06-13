@@ -13,6 +13,7 @@ public class HHGXRLab : ModuleRules
             "Engine",
             "Json",
             "JsonUtilities",
+            "ProceduralMeshComponent",
         });
 
         PrivateDependencyModuleNames.AddRange(new string[] { });

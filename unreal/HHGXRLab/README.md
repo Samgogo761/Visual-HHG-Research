@@ -47,6 +47,48 @@ changed from `const TSharedPtr<FJsonValue>&` (5.3) to
 
 ---
 
+## Quick visual test: 3D band surface (AHHGXRBundleViewerActor)
+
+The plugin ships a reference Actor that loads a bundle and builds one
+`UProceduralMeshComponent` band surface per band in
+`band_grid_preview.energies_eV`. No editor assets, no Play required.
+
+1. **Window > Place Actors**, search **HHG-XR Bundle Viewer**, drag one
+   into your level (or use the **Outliner > +Add** dropdown).
+2. With the Actor selected, in the **Details** panel:
+   - **Bundle Dir (absolute path)**: e.g. `C:/tmp/hhgxr_first_real_bundle`
+     (forward slashes are fine). On save / Enter, the mesh builds
+     in-editor.
+   - **K Scale** / **E Scale**: world units per (1/bohr) and per eV.
+     Defaults 200 / 20 put a `(0.5)^2` BZ slab into a ~2 m square that
+     reaches ~1 m up for a 5 eV band; tune to taste.
+   - **Surface Material**: leave None for the default gray engine
+     material, or drop any material here. The mesh has vertex colors
+     keyed to a per-band palette, so a vertex-color-aware material
+     (e.g. an emissive that multiplies `VertexColor`) will show the
+     bands as distinct colored sheets.
+3. Click the **Rebuild From Bundle** button at the top of the Details
+   panel to reload after any tweak (also triggered automatically while
+   *Auto Rebuild In Editor* is on, the default).
+
+The 3D text component above the surface is the provenance badge: it
+shows `<source_class> | <gauge> | field: <raw solver / reconstructed
+(not raw) / unavailable>` and is colored green / orange / grey / red to
+match the Python quicklook.
+
+### Expected look for `verify_obs_exports_20260611`
+
+- 4 sheets (one per `selected_band_indices`, default range 80..90 from
+  the converter, capped to 4 by `--max-grid` if you used the smaller
+  preview); each is a smooth 40x40 paraboloid-ish surface.
+- Above the surface: a yellow / orange line reading
+  `Data-driven | lg_cov | field: raw solver`.
+- The Output Log prints
+  `HHG-XR: built N band surface(s), 40x40 grid, ~12480 triangles total`.
+
+If you see `LOAD FAILED: ...` above the surface, the message is the
+reason (bad path / missing manifest / wrong schema id).
+
 ## Fastest smoke test (Blueprint, no extra C++)
 
 `DescribeBundle` loads a bundle and returns a one-glance multi-line
