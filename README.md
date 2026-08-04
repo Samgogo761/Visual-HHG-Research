@@ -6,7 +6,10 @@ into a clean, sanitized, Unreal-friendly data bundle.
 
 The working name of the project is **HHG-XR Lab**.
 
-> Status: v0 — data pipeline and provenance scaffolding. **No XR build yet.**
+> Status: **v0.3 pre-alpha** — data pipeline + Unreal plugin viewer (occupation
+> animation on the Claude branch). **No XR build yet.**
+> For the authoritative handoff snapshot, see
+> [`docs/work-records/`](./docs/work-records/README.md).
 
 ---
 
@@ -44,6 +47,7 @@ Visual-HHG-Research/
   .gitattributes
 
   docs/
+    work-records/              # CURRENT STATUS + next actions (start here after a break)
     DATA_SCHEMA.md             # manifest.json + data_small.json schema
     PHYSICS_PROVENANCE.md      # provenance labels and what is real vs. reconstructed
     UNREAL_IMPORT.md           # how an Unreal client reads the bundle
