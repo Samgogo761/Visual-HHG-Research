@@ -47,6 +47,114 @@ changed from `const TSharedPtr<FJsonValue>&` (5.3) to
 
 ---
 
+## Quick visual test: 3D band surface (AHHGXRBundleViewerActor)
+
+The plugin ships a reference Actor that loads a bundle and builds one
+`UProceduralMeshComponent` band surface per band in
+`band_grid_preview.energies_eV`. No editor assets, no Play required.
+
+1. **Window > Place Actors**, search **HHG-XR Bundle Viewer**, drag one
+   into your level (or use the **Outliner > +Add** dropdown).
+2. With the Actor selected, in the **Details** panel:
+   - **Bundle Dir (absolute path)**: e.g. `C:/tmp/hhgxr_first_real_bundle`
+     (forward slashes are fine). On save / Enter, the mesh builds
+     in-editor.
+   - **K Scale** / **E Scale**: world units per (1/bohr) and per eV.
+     Defaults 200 / 20 put a `(0.5)^2` BZ slab into a ~2 m square that
+     reaches ~1 m up for a 5 eV band; tune to taste.
+   - **Surface Material**: leave None for the default gray engine
+     material, or drop any material here. The mesh has vertex colors
+     keyed to a per-band palette, so a vertex-color-aware material
+     (e.g. an emissive that multiplies `VertexColor`) will show the
+     bands as distinct colored sheets.
+3. Click the **Rebuild From Bundle** button at the top of the Details
+   panel to reload after any tweak (also triggered automatically while
+   *Auto Rebuild In Editor* is on, the default).
+
+The 3D text component above the surface is the provenance badge: it
+shows `<source_class> | <gauge> | field: <raw solver / reconstructed
+(not raw) / unavailable>` and is colored green / orange / grey / red to
+match the Python quicklook.
+
+### Occupation over time (k_space_occupation module)
+
+When the bundle carries an `occupation_preview`, the band colors animate
+with the per-k conduction population change `delta_n_cond(k,t)`:
+
+- **conduction** bands (global band index > `n_valence`) brighten where
+  electrons are promoted;
+- **valence** bands (index <= `n_valence`) dim where they are depleted;
+- at `t = 0` `delta_n_cond` is zero everywhere, so conduction starts
+  dim and valence starts bright -- the equilibrium.
+
+Physics-honesty note: the band *geometry never moves*. Band energies are
+static; only the occupation field changes. We deliberately do **not**
+wobble the band height at the laser frequency, because that would imply
+the band structure itself oscillates, which it does not.
+
+Controls (Details panel, category *HHG-XR | Occupation*):
+
+- **Snapshot Index**: scrub through snapshots in the editor; the badge
+  shows `t = <fs>  (snap k/N)`.
+- **Occupation Gain**: brightness response to `delta_n_cond`; raise it
+  to make resonant k-pockets pop sooner.
+- **Dim Floor**: how dark an unexcited conduction (or fully depleted
+  valence) band gets (0..1).
+- **Show Occupation**: off => flat band palette (the old static look).
+- **Animate In Play** + **Seconds Per Snapshot**: press **Play** and the
+  snapshots auto-advance so the pulse plays out; for
+  `verify_obs_exports_20260611` you should see conduction k-pockets
+  light up around the pulse peak (~21 fs / mid-snapshot) and stay
+  partially lit afterwards (incomplete T2 relaxation).
+
+### Expected look for `verify_obs_exports_20260611`
+
+- 4 sheets (one per `selected_band_indices`, default range 80..90 from
+  the converter, capped to 4 by `--max-grid` if you used the smaller
+  preview); each is a smooth 40x40 paraboloid-ish surface.
+- Above the surface: a yellow / orange line reading
+  `Data-driven | lg_cov | field: raw solver`.
+- The Output Log prints
+  `HHG-XR: built N band surface(s), 40x40 grid, ~12480 triangles total`.
+
+If you see `LOAD FAILED: ...` above the surface, the message is the
+reason (bad path / missing manifest / wrong schema id).
+
+## Fastest smoke test (Blueprint, no extra C++)
+
+`DescribeBundle` loads a bundle and returns a one-glance multi-line
+summary, so the entire verification is three nodes:
+
+1. Open the **Level Blueprint** (toolbar **Blueprints > Open Level
+   Blueprint**).
+2. Right-click the graph, add **Event BeginPlay**.
+3. Right-click, search **Describe Bundle** (category *HHG-XR | Bundle*),
+   add it, and wire BeginPlay -> Describe Bundle.
+4. In its **Bundle Dir Abs** field type a bundle directory with forward
+   slashes, e.g. `C:/tmp/hhgxr_first_real_bundle`.
+5. Drag from the **Return Value** (string) into a **Print String** node;
+   wire the exec pins.
+6. Press **Play**. The summary prints in the top-left viewport overlay
+   and the Output Log.
+
+A healthy real-data readout looks like:
+
+```
+schema       : hhgxr-demo-bundle-v0
+dataset      : verify_obs_exports_20260611...
+source_class : Data-driven
+gauge        : lg_cov
+dims         : nt=5045 nkx=40 nky=40 n_bands=112 n_val=84
+field.source : raw solver
+available(13): current_time_series, hhg_spectrum, ...
+band_path    : layout=wannier90_long n_bands=112 near_gap=20 eFermi=0.0843
+occupation   : 9 snapshots
+coherence    : 9 snapshots
+```
+
+If you see `LOAD FAILED: ...`, the message is the reason (bad path,
+missing manifest.json, or unsupported schema).
+
 ## Minimal C++ usage
 
 ```cpp
@@ -183,3 +291,31 @@ the plugin's C++ source when it loads. To produce a clean rebuild path:
 This is normal the first time the plugin is added. Click **Yes** to
 build modules; if that fails, follow the steps above to inspect the
 actual compile error.
+
+### `RulesError` / "Expecting to find a type ... named 'X'" with X != HHGXRLab
+
+If the build fails on a *different* plugin name, the host `.uproject`
+references a plugin whose source is not present in this engine install.
+A common culprit is Microsoft's `VisualStudioTools` plugin, which is
+not bundled with a stock UE install:
+
+```
+Expecting to find a type to be declared in a module rules named
+'VisualStudioTools' ... Result: Failed (RulesError)
+```
+
+UnrealBuildTool aborts the whole UE5Rules assembly before it ever
+reaches HHGXRLab, so *every* plugin then reports as "incompatible or
+missing" — a misleading cascade. The fix is to remove the dangling
+reference from `<YourProject>.uproject` (the `Plugins` array), not to
+touch HHGXRLab:
+
+```powershell
+$proj = "C:/path/to/YourProject.uproject"
+Copy-Item $proj "$proj.bak"
+$json = Get-Content $proj -Raw | ConvertFrom-Json
+$json.Plugins = @($json.Plugins | Where-Object { $_.Name -ne "VisualStudioTools" })
+$json | ConvertTo-Json -Depth 10 | Set-Content $proj -Encoding UTF8
+```
+
+Then delete `Binaries/` + `Intermediate/` and rebuild.
